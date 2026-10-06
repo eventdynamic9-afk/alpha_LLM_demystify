@@ -23,7 +23,7 @@ class ReferenceLibrary:
         self.market = ctx.panel.market
         self.include_library = include_library
         self._cache: dict[str, np.ndarray] = {}
-        self._turnover_pcts = None
+        self._turnover_pcts: dict[str, dict] = {}
 
     # ------------------------------------------------------------------ names
     def characteristic_names(self) -> list[str]:
@@ -104,8 +104,8 @@ class ReferenceLibrary:
 
     # ------------------------------------------------------------------ turnover reference distribution
     def turnover_percentiles(self, window: str = "train") -> dict:
-        """Mean lag-1 rank autocorrelation of every characteristic and base-set library signal."""
-        if self._turnover_pcts is None:
+        """Mean lag-1 rank autocorrelation of every characteristic and base-set library signal (per window)."""
+        if window not in self._turnover_pcts:
             rows = self.ctx.rows(window)
             vals = []
             names = self.characteristic_names() + [f.lib_id for f in library().values() if f.base]
@@ -114,7 +114,8 @@ class ReferenceLibrary:
                 if np.isfinite(ac).sum() > 10:
                     vals.append(float(np.nanmean(ac)))
             vals = np.array(vals)
-            self._turnover_pcts = {"values": vals,
-                                   "p75": float(np.percentile(vals, self.ctx.thr["behavioral"]["turnover_low_percentile"])),
-                                   "p25": float(np.percentile(vals, self.ctx.thr["behavioral"]["turnover_high_percentile"]))}
-        return self._turnover_pcts
+            self._turnover_pcts[window] = {
+                "values": vals, "window": window,
+                "p75": float(np.percentile(vals, self.ctx.thr["behavioral"]["turnover_low_percentile"])),
+                "p25": float(np.percentile(vals, self.ctx.thr["behavioral"]["turnover_high_percentile"]))}
+        return self._turnover_pcts[window]

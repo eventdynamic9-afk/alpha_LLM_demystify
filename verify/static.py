@@ -6,7 +6,7 @@ from __future__ import annotations
 import numpy as np
 
 from dsl import Node, canonicalize, effective_lookback, walk
-from dsl.monotonicity import AMB, NEG, POS, current_value_direction
+from dsl.monotonicity import AMB, NEG, POS, field_direction, sign_map
 from dsl.operators import OPS, XS
 from dsl.ranges import interval
 
@@ -45,33 +45,43 @@ def verify_depends_on(node: Node, spec: InputSpec, ctx=None) -> Verdict:
     return Verdict(SUPPORTED, "static_dependency", ev)
 
 
-def verify_lookback(node: Node, window: int) -> Verdict:
-    """SUPPORTED if the claimed window equals a window/lag parameter of the formula or its effective
-    span (lookback L or L+1 days including today); REFUTED otherwise (exact)."""
+def lookback_matches(L: int, window: int, convention: str = "L_or_L+1") -> bool:
+    """Pre-registered LOOKBACK convention (thresholds.yaml ``lookback.convention``): the claimed n is
+    compared with the effective lookback L (lags d + windows n - 1), its span L + 1 (days including
+    today), or either."""
+    return window in {"L": (L,), "L+1": (L + 1,), "L_or_L+1": (L, L + 1)}[convention]
+
+
+def uses_window(node: Node, window: int) -> bool:
+    """Whether some time-series operator has window/lag parameter ``window`` (evidence only; it does
+    not decide LOOKBACK claims, §10.2)."""
+    return window in window_parameters(node)
+
+
+def verify_lookback(node: Node, window: int, convention: str = "L_or_L+1") -> Verdict:
+    """§10.2: compare the claimed n with the effective lookback exactly; SUPPORTED iff n matches L under
+    the pre-registered convention, REFUTED otherwise.  Window parameters are reported as evidence only."""
     L = effective_lookback(node)
     params = window_parameters(node)
-    ev = {"effective_lookback": L, "span_days": L + 1, "window_params": sorted(params), "claimed": window}
-    ok = window in params or window in (L, L + 1)
-    return Verdict(SUPPORTED if ok else REFUTED, "static_lookback", ev)
+    ev = {"effective_lookback": L, "span_days": L + 1, "convention": convention, "window_params": sorted(params),
+          "claimed": window, "claimed_is_window_param": window in params}
+    return Verdict(SUPPORTED if lookback_matches(L, window, convention) else REFUTED, "static_lookback", ev)
 
 
-def horizon_bin_of(span: int, bins: dict) -> list[str]:
-    out = []
-    for name, (lo, hi) in bins.items():
-        if lo <= span <= hi:
-            out.append(name)
-    return out
+def horizon_bin_of(lookback: int, bins: dict) -> list[str]:
+    return [name for name, (lo, hi) in bins.items() if lo <= lookback <= hi]
 
 
 def verify_horizon(node: Node, bin_name: str, bins: dict) -> Verdict:
+    """§10.2 / §10.6: the effective lookback L itself is binned (<= 5 / <= 21 / 22-126 / > 126 days)."""
     L = effective_lookback(node)
-    span = L + 1
     if bin_name not in bins:
         return Verdict(UNVERIFIABLE, "static_lookback_bins", {"reason": f"unknown horizon bin {bin_name!r}"})
     lo, hi = bins[bin_name]
-    ok = lo <= span <= hi
+    ok = lo <= L <= hi
     return Verdict(SUPPORTED if ok else REFUTED, "static_lookback_bins",
-                   {"span_days": span, "claimed_bin": bin_name, "bin": [lo, hi], "bins_of_span": horizon_bin_of(span, bins)})
+                   {"effective_lookback": L, "span_days": L + 1, "claimed_bin": bin_name, "bin": [lo, hi],
+                    "bins_of_lookback": horizon_bin_of(L, bins)})
 
 
 def xsec_coverage(node: Node) -> tuple[int, int]:
@@ -178,14 +188,29 @@ def verify_struct(node: Node, pattern: str) -> Verdict:
 
 
 # ------------------------------------------------------------------------------------- directions
+def input_field(spec: InputSpec) -> str | None:
+    """Panel field whose own value a direction claim is about (None for derived quantities)."""
+    return spec.field if spec.kind == "field" else "volume" if spec.kind == "abn_vol" else None
+
+
+def read_lag(node: Node, fieldname: str) -> int | None:
+    """Most recent lag at which the formula reads ``fieldname`` (0 = today's value); None if never."""
+    lags = [lag for (f, lag) in sign_map(node) if f == fieldname]
+    return min(lags) if lags else None
+
+
 def static_direction(node: Node, spec: InputSpec) -> int | None:
-    """Exact direction of the formula w.r.t. raising the input's most recent value (POS/NEG), 0 if it
-    does not depend on it, AMB/None if static analysis cannot decide (-> nudge test)."""
-    if spec.kind == "field":
-        return current_value_direction(node, spec.field)
-    if spec.kind == "abn_vol":
-        return current_value_direction(node, "volume")
-    return None
+    """Exact direction of the formula w.r.t. raising the input's most recent value that the formula reads
+    (POS/NEG): the current value, or the most recent lagged leaf when the field enters only through
+    ``Ref`` & co. (§10.2: ``Ref`` preserves).  0 only if the field is absent from the dependency set;
+    AMB/None if static analysis cannot decide (-> SMT / nudge test)."""
+    f = input_field(spec)
+    if f is None:
+        return None
+    if f not in dependency_set(node):
+        return 0
+    lag = read_lag(node, f)
+    return AMB if lag is None else field_direction(node, f, (lag,))
 
 
 def direction_symbol(s: int) -> str:

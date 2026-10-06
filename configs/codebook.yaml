@@ -105,6 +105,16 @@ reference_signals:
   INTRADAY_PRESSURE_VWAP: {dsl: "$close-$vwap", description: "close - VWAP (CN)", markets: [CN]}
   SIZE_PROXY: {dsl: "Log(Mean($amount, 21))", description: "log 21-day mean dollar volume (size proxy; OHLCV has no shares outstanding)"}
 
+# "Best of a set" claims (§10.4): BETTER_THAN(ref) / PERF(level) whose ref / level is one of these words
+# (exact match) are decided by a Romano-Wolf stepdown against every member of the set (RC / SPA reported).
+#   library:    every same-panel reference characteristic (Appendix C)
+#   candidates: the formula's logged mining candidates (P1-mined refinement rounds, P3a GP run)
+best_of_sets:
+  library: ["all", "all factors", "existing factors", "standard factors", "known factors", "classic factors",
+            "the library", "reference set", "all references", "benchmarks", "all benchmarks"]
+  candidates: ["best", "best of", "best-of", "best of set", "top", "best candidate", "the candidates",
+               "other candidates", "all variants", "other variants", "family", "trials"]
+
 # Technical-indicator templates for VARIANT_OF (§10.2 identity claims)
 variant_templates:
   RSI:        {dsl: "Mean(Greater($close-Ref($close, 1), 0), 14)/(Mean(Greater($close-Ref($close, 1), 0), 14)+Mean(Greater(Ref($close, 1)-$close, 0), 14))", words: ["rsi", "relative strength index"]}

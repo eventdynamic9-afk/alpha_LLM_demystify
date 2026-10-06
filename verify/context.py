@@ -6,11 +6,29 @@ from dataclasses import dataclass, field
 import numpy as np
 import pandas as pd
 
-from configs import codebook, study, thresholds
+from configs import codebook, models, study, thresholds
 from data.labels import daily_returns, forward_returns
 from data.panel import Panel
 from dsl import Node, canonical_hash, parse
 from executors import E2Executor
+
+
+def resolve_post_window(roster: dict | str | None, data_end: str) -> tuple[tuple[str, str] | None, dict]:
+    """H_post = [latest narrator training cutoff + 1 month, data end] (§5.2) from the narrator roster
+    (configs/models.yaml by default); returns (window or None, status)."""
+    from narrate.roster import latest_narrator_cutoff, post_cutoff_window
+
+    try:
+        cfg = roster if isinstance(roster, dict) else models(roster or "models.yaml")
+    except (OSError, ValueError) as exc:
+        return None, {"status": "not_run", "reason": f"roster not readable: {exc}"}
+    if latest_narrator_cutoff(cfg) is None:
+        return None, {"status": "not_run", "reason": "narrator training cutoffs not documented in the roster"}
+    w = post_cutoff_window(cfg, data_end)
+    if w is None:
+        return None, {"status": "not_run", "reason": f"latest cutoff + 1 month is after the data end {data_end}",
+                      "latest_cutoff": str(latest_narrator_cutoff(cfg).date())}
+    return w, {"status": "computed", "source": "roster", "latest_cutoff": str(latest_narrator_cutoff(cfg).date())}
 
 
 @dataclass
@@ -20,14 +38,26 @@ class VerificationContext:
     thr: dict = field(default_factory=thresholds)
     cb: dict = field(default_factory=codebook)
     executor: object = field(default_factory=E2Executor)
-    external_factors: pd.DataFrame | None = None        # e.g. Ken French daily table (decimal returns)
+    external_factors: pd.DataFrame | None = None        # US: Ken French daily FF5 + Mom + ST_Rev (decimal returns)
+    external_factors_monthly: pd.DataFrame | None = None  # CN: Liu-Stambaugh-Yuan CH-3 (CH-4) monthly (decimal)
     seed: int = 20261006
     fast: bool = False                                  # smaller bootstrap/nudge sizes (tests, smoke runs)
+    roster: dict | str | None = None                    # narrator roster for H_post (default configs/models.yaml)
+    auto_post: bool = True                              # add windows["post"] = H_post when resolvable (§5.2)
 
     def __post_init__(self) -> None:
         if not self.windows:
             sp = study()["splits"]["comparability"]
             self.windows = {k: tuple(sp[k]) for k in ("train", "valid", "test") if k in sp}
+        self.windows = dict(self.windows)
+        if "post" in self.windows:
+            self.post_status = {"status": "given", "source": "windows"}
+        elif self.auto_post:
+            w, self.post_status = resolve_post_window(self.roster, str(pd.Timestamp(self.panel.dates[-1]).date()))
+            if w is not None:
+                self.windows["post"] = tuple(w)
+        else:
+            self.post_status = {"status": "not_run", "reason": "auto_post disabled"}
         self._signals: dict[str, np.ndarray] = {}
         self._fwd: dict[tuple, np.ndarray] = {}
         self._refs = None

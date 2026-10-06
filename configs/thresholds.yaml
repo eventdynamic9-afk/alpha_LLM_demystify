@@ -61,9 +61,12 @@ identity:                    # §6.5 / §10.2
     equivalence_rho: [0.995]
 
 performance:                 # §10.4
-  discovery_t: 3.0           # HLZ bar, used for verdicts
-  reported_t: 2.0            # reported, never used for verdicts
-  refute_t: 2.0              # "robust/significant" claim REFUTED if OOS t below the conventional bar
+  discovery_t: 3.0           # HLZ bar: "significant/robust" SUPPORTED iff OOS t > 3.0
+  reported_t: 2.0            # reported (t_above_reported_bar), never used for verdicts (§10.6)
+  refute_ci_level: 0.95      # REFUTED iff the 95% interval of the OOS t (t +/- 1.96) lies entirely <= discovery_t
+                             # (§10.1 "entirely in the false region"); NaN t -> UNVERIFIABLE. Rule added at audit:
+                             # record in the pre-registration / deviation log before the main run.
+  best_of_alpha: 0.05        # "best of" claims: Romano-Wolf stepdown FWER (RC / SPA p-values reported)
   stability_supported_share: 0.75
   stability_refuted_share: 0.50
   dsr_supported: 0.95
@@ -76,6 +79,8 @@ performance:                 # §10.4
     sensitivity_per_trade: 15
 
 metamorphic:
+  scale_c: 1.7               # INVARIANT(scale, price|volume): all prices (volumes) multiplied by one c > 0 (§10.2);
+                             # per-stock c_i ~ U(0.5, 2) relations are reported only
   exact_rel_tol: 1.0e-9      # relation "holds exactly"
   violation_rel_tol: 1.0e-3  # relative deviation counted as a violation
   violation_share: 0.01      # REFUTED if more than this share of valid cells violate
@@ -83,7 +88,11 @@ metamorphic:
 range:
   empirical_tol: 1.0e-9
 
-horizon_bins:                # §9.5 / §10.6 / Appendix C (trading days, inclusive upper bounds)
+lookback:                    # §10.2 LOOKBACK(n) vs the effective lookback L (sum of lags d and windows n - 1)
+  convention: "L_or_L+1"     # n == L or n == L + 1 (span incl. today; "a 20-day window" = Mean(x, 20), L = 19);
+                             # window parameters are evidence only. HORIZON bins the effective lookback L itself.
+
+horizon_bins:                # §9.5 / §10.6 / Appendix C (trading days, inclusive upper bounds; applied to L)
   very_short: 5
   short: 21
   medium: 126                # 22-126

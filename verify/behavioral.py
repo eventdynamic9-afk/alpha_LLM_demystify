@@ -6,7 +6,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from .factors import decile_long_short
+from .factors import decile_long_short, long_short_turnover, monthly_compound
 from .stats import (bootstrap_mean_ci, daily_spearman, hac_ols, lag1_rank_autocorr, newey_west_mean, nw_lags,
                     tost_equivalent)
 from .verdicts import (REFUTED, SUPPORTED, UNRESOLVED, UNVERIFIABLE, Verdict, aggregate_any_all)
@@ -35,7 +35,8 @@ def _replicate(ctx, fn) -> Verdict:
     if len(wins) > 1:
         rep = fn(wins[1])
         primary.evidence["replication"] = {"window": wins[1], "verdict": rep.verdict, **{
-            k: v for k, v in rep.evidence.items() if k in ("rho_bar", "ci95", "t", "beta", "mean")}}
+            k: v for k, v in rep.evidence.items() if k in ("rho_bar", "ci95", "ci90", "newey_west", "t", "beta", "mean",
+                                                           "absolute", "ref_p75", "ref_p25")}}
         if primary.decidable and rep.decidable and primary.verdict != rep.verdict:
             primary.regime_dependent = True
     primary.evidence["window"] = wins[0]
@@ -47,6 +48,12 @@ def _rho_stats(ctx, f, g, rows, level, seed):
     series = daily_spearman(f, g, rows)
     m, lo, hi, b = bootstrap_mean_ci(series, level, ctx.n_boot(), seed)
     return series, m, lo, hi, b
+
+
+def _nw(series: np.ndarray) -> dict:
+    """Newey-West cross-check of rho_bar (§10.3): mean, HAC standard error and t."""
+    m, se, t = newey_west_mean(series)
+    return {"mean": m, "se": se, "t": t}
 
 
 def verify_resembles(f: np.ndarray, ctx, ref: str, sign="+", scope_mask=None) -> Verdict:
@@ -61,9 +68,9 @@ def verify_resembles(f: np.ndarray, ctx, ref: str, sign="+", scope_mask=None) ->
         g = ctx.references.signal(name)
 
         def run(window, g=g, eff=eff, name=name):
-            _, m, lo, hi, b = _rho_stats(ctx, eff * f, g, ctx.rows(window), cfg["ci_level"], ctx.seed)
+            series, m, lo, hi, b = _rho_stats(ctx, eff * f, g, ctx.rows(window), cfg["ci_level"], ctx.seed)
             ev = {"ref": name, "claimed_sign": eff, "rho_bar": m, "ci95": [lo, hi], "block": b,
-                  "market": ctx.panel.market}
+                  "newey_west": _nw(series), "market": ctx.panel.market}
             if not np.isfinite(lo):
                 return Verdict(UNVERIFIABLE, "signal_corr", ev)
             if lo >= cfg["resemblance_floor"]:
@@ -95,7 +102,8 @@ def verify_independent(f: np.ndarray, ctx, ref: str, scope_mask=None) -> Verdict
             series = daily_spearman(f, g, ctx.rows(window))
             m, lo90, hi90, b = bootstrap_mean_ci(series, cfg["tost_ci_level"], ctx.n_boot(), ctx.seed)
             _, lo95, hi95, _ = bootstrap_mean_ci(series, cfg["ci_level"], ctx.n_boot(), ctx.seed, block=b)
-            ev = {"ref": name, "rho_bar": m, "ci90": [lo90, hi90], "ci95": [lo95, hi95], "margin": mgn}
+            ev = {"ref": name, "rho_bar": m, "ci90": [lo90, hi90], "ci95": [lo95, hi95], "margin": mgn,
+                  "newey_west": _nw(series)}
             if not np.isfinite(lo90):
                 return Verdict(UNVERIFIABLE, "signal_corr_tost", ev)
             if tost_equivalent((lo90, hi90), mgn):
@@ -105,42 +113,78 @@ def verify_independent(f: np.ndarray, ctx, ref: str, scope_mask=None) -> Verdict
             return Verdict(UNRESOLVED, "signal_corr_tost", ev)
 
         out.append(_replicate(ctx, run))
-    # a claim of independence fails if dependence on any operationalization is shown
-    if any(v.verdict == REFUTED for v in out):
-        verdict = REFUTED
-    elif all(v.verdict == SUPPORTED for v in out):
-        verdict = SUPPORTED
-    else:
-        verdict = UNRESOLVED
-    return Verdict(verdict, "signal_corr_tost", {"operationalizations": [v.to_dict() for v in out]},
-                   any(v.regime_dependent for v in out))
+    # pre-registered aggregation over operationalizations (Appendix C, configs/codebook.yaml)
+    return aggregate_any_all(out, "signal_corr_tost")
 
 
 # --------------------------------------------------------------------------------- exposure
-_REF_TO_FACTOR = {"SIZE_PROXY": ("SMB", -1), "STREV_5d": ("STREV", 1), "MOM_12_1": ("MOM", 1),
-                  "VOL_20d": ("LOWVOL", -1), "AMIHUD_21d": ("ILLIQ", 1)}
+def _exposure_rule(cfg: dict, ev: dict, beta: float, t: float, se: float, eff: int) -> Verdict:
+    """§10.3: HAC t >= 3 in the claimed sign with |beta| above the floor; REFUTED if t >= 3 in the opposite
+    sign or TOST (90% CI) puts the absolute loading below the floor."""
+    if not np.isfinite(t):
+        return Verdict(UNVERIFIABLE, "exposure", {**ev, "reason": "loading t not computable"})
+    if eff * t >= cfg["exposure_t"] and abs(beta) >= cfg["exposure_beta_floor"]:
+        return Verdict(SUPPORTED, "exposure", ev)
+    if -eff * t >= cfg["exposure_t"]:
+        return Verdict(REFUTED, "exposure", ev)
+    z = 1.6448536269514722
+    if -cfg["exposure_beta_floor"] < beta - z * se and beta + z * se < cfg["exposure_beta_floor"]:
+        return Verdict(REFUTED, "exposure", {**ev, "reason": "TOST: loading below the floor"})
+    return Verdict(UNRESOLVED, "exposure", ev)
+
+
+def _exposure_monthly(ctx, ls: np.ndarray, targets: list[tuple[str, int]], sign, cfg: dict) -> Verdict:
+    """CN: regression of the monthly-compounded long-short return on the CH-3 (CH-4) monthly factors."""
+    ch = ctx.factors.monthly_controls()
+    lsm = monthly_compound(np.r_[np.nan, ls[:-1]], ctx.panel.dates)      # index by realization date t+1
+    df = pd.concat([lsm.rename("ls"), ch], axis=1, join="inner")
+    out = []
+    for fac, s in targets:
+        eff = _sgn(sign) * s
+
+        def run(window, fac=fac, eff=eff):
+            a, b = (pd.Timestamp(x).to_period("M") for x in ctx.windows[window])
+            d = df[(df.index >= a) & (df.index <= b)]
+            res = hac_ols(d["ls"].to_numpy(), d[list(ch.columns)].to_numpy(), names=list(ch.columns))
+            ev = {"factor": fac, "claimed_sign": eff, "controls": list(ch.columns), "frequency": "monthly",
+                  "factor_source": "ch3_monthly"}
+            if not res.get("ok"):
+                return Verdict(UNVERIFIABLE, "exposure", {**ev, "reason": "insufficient monthly observations"})
+            beta, t, se = res["params"][fac], res["t"][fac], res["bse"][fac]
+            ev.update({"beta": beta, "t": t, "se": se, "n": res["n"]})
+            return _exposure_rule(cfg, ev, beta, t, se, eff)
+
+        out.append(_replicate(ctx, run))
+    return aggregate_any_all(out, "exposure")
 
 
 def verify_exposed(f: np.ndarray, ctx, factor: str, sign="+", scope_mask=None) -> Verdict:
-    names = ctx.factors.names()
-    targets: list[tuple[str, int]] = []
-    if factor in names:
-        targets = [(factor, 1)]
-    else:
-        for ref, s in ctx.references.resolve(factor):
-            if ref in _REF_TO_FACTOR and _REF_TO_FACTOR[ref][0] in names:
-                fac, fs = _REF_TO_FACTOR[ref]
-                targets.append((fac, s * fs))
-    if not targets:
-        # no factor-return series: decide at the signal level with the resemblance rule
-        v = verify_resembles(f, ctx, factor, sign, scope_mask)
-        v.method = "exposure_signal_level"
-        return v
+    """§10.3 EXPOSED (return level).  Factor set: US = Ken French FF5 + Mom + ST_Rev daily when
+    ``ctx.external_factors`` is loaded (else the self-built proxies, flagged as a deviation); CN =
+    self-built daily factors, plus the CH-3 monthly regression when ``ctx.external_factors_monthly`` is
+    loaded (decides only factors absent from the daily set, otherwise reported as a cross-check).  When
+    no factor-return series exists for the claimed factor the claim is decided at the signal level with
+    the resemblance rule and the fallback is stated in the evidence."""
+    fs = ctx.factors
+    targets = fs.targets(factor, ctx.references.resolve(factor))
+    m_targets = fs.monthly_targets(factor, ctx.references.resolve(factor))
     cfg = ctx.thr["behavioral"]
-    controls = ctx.factors.controls()
+    src = {"factor_source": fs.source(), **({"deviation": fs.deviation()} if fs.deviation() else {})}
     fwd = ctx.fwd(1, "close_t")
     member = ctx.panel.member if scope_mask is None else (ctx.panel.member & scope_mask)
+    if not targets and not m_targets:
+        v = verify_resembles(f, ctx, factor, sign, scope_mask)
+        v.method = "exposure_signal_level"
+        v.evidence.update({**src, "fallback": f"no factor-return series for {factor!r} in {fs.source()}"
+                                              f"{' / ch3_monthly' if fs.has_monthly() else ''}; decided at the "
+                                              "signal level with the resemblance rule"})
+        return v
     ls = decile_long_short(f, fwd, member)
+    if not targets:
+        v = _exposure_monthly(ctx, ls, m_targets, sign, cfg)
+        v.evidence.update(src)
+        return v
+    controls = fs.controls()
     out = []
     for fac, s in targets:
         eff = _sgn(sign) * s
@@ -149,34 +193,39 @@ def verify_exposed(f: np.ndarray, ctx, factor: str, sign="+", scope_mask=None) -
             rows = ctx.rows(window)
             X = controls.to_numpy()[rows]
             res = hac_ols(ls[rows], X, names=list(controls.columns))
-            ev = {"factor": fac, "claimed_sign": eff, "controls": list(controls.columns)}
+            ev = {"factor": fac, "claimed_sign": eff, "controls": list(controls.columns), **src}
             if not res.get("ok"):
                 return Verdict(UNVERIFIABLE, "exposure", {**ev, "reason": "insufficient observations"})
             beta, t, se = res["params"][fac], res["t"][fac], res["bse"][fac]
             ev.update({"beta": beta, "t": t, "se": se, "n": res["n"]})
-            if eff * t >= cfg["exposure_t"] and abs(beta) >= cfg["exposure_beta_floor"]:
-                return Verdict(SUPPORTED, "exposure", ev)
-            if -eff * t >= cfg["exposure_t"]:
-                return Verdict(REFUTED, "exposure", ev)
-            z = 1.6448536269514722
-            if -cfg["exposure_beta_floor"] < beta - z * se and beta + z * se < cfg["exposure_beta_floor"]:
-                return Verdict(REFUTED, "exposure", {**ev, "reason": "TOST: loading below the floor"})
-            return Verdict(UNRESOLVED, "exposure", ev)
+            return _exposure_rule(cfg, ev, beta, t, se, eff)
 
         out.append(_replicate(ctx, run))
-    return aggregate_any_all(out, "exposure")
+    v = aggregate_any_all(out, "exposure")
+    v.evidence.update(src)
+    if m_targets:
+        cross = _exposure_monthly(ctx, ls, m_targets, sign, cfg)
+        v.evidence["ch3_monthly"] = {"verdict": cross.verdict, **cross.evidence}
+    return v
 
 
 # --------------------------------------------------------------------------------- turnover
 def verify_turnover(f: np.ndarray, ctx, level: str, scope_mask=None) -> Verdict:
+    """Relative rule (decides): mean lag-1 rank autocorrelation CI vs the reference library's 75th / 25th
+    percentiles on the same window.  Absolute definitions (mean rank autocorrelation, daily decile
+    long-short turnover) are reported next to it (§10.3)."""
     cfg = ctx.thr["behavioral"]
-    pct = ctx.references.turnover_percentiles()
     f = _masked(f, scope_mask)
 
     def run(window):
-        ac = lag1_rank_autocorr(f, ctx.rows(window))
+        pct = ctx.references.turnover_percentiles(window)
+        rows = ctx.rows(window)
+        ac = lag1_rank_autocorr(f, rows)
         m, lo, hi, b = bootstrap_mean_ci(ac, cfg["ci_level"], ctx.n_boot(), ctx.seed)
-        ev = {"rank_autocorr": m, "ci95": [lo, hi], "ref_p75": pct["p75"], "ref_p25": pct["p25"], "level": level}
+        to = long_short_turnover(f, ctx.panel.member, rows)
+        ev = {"rank_autocorr": m, "ci95": [lo, hi], "ref_p75": pct["p75"], "ref_p25": pct["p25"], "level": level,
+              "absolute": {"mean_rank_autocorr": m, "mean_daily_ls_turnover": float(np.nanmean(to)) if np.isfinite(to).any()
+                           else float("nan")}}
         if not np.isfinite(lo):
             return Verdict(UNVERIFIABLE, "rank_autocorr", ev)
         slow, fast = lo > pct["p75"], hi < pct["p25"]

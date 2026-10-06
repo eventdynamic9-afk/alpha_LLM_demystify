@@ -9,7 +9,8 @@ exact Clopper-Pearson interval:
   SUPPORTED  if lower bound >= 0.90      REFUTED if upper bound <= 0.10      else UNRESOLVED
 
 Perturbations (pre-registered):
-  field x          x_t *= exp(delta * sd(dlog x))                       (latest value only)
+  field x          x_{t-k} *= exp(delta * sd(dlog x))                   (most recent value the formula reads:
+                                                                         k = 0, or the smallest lag of x)
   ret_d            close_{t-d+1+k} *= (1 + delta*sd(r_d))^((k+1)/d)    (path rescaling, k = 0..d-1)
   abn_vol          volume_t *= exp(delta * sd(dlog volume))
   volatility_n     de-meaned last-n log returns scaled by (1 + kappa), closes rebuilt
@@ -60,16 +61,18 @@ def _sigma(ctx, spec: InputSpec, rows: np.ndarray) -> np.ndarray:
     raise ValueError(spec.kind)
 
 
-def _perturb(fields: dict, j: int, e: int, spec: InputSpec, delta: float, sigma: float) -> bool:
-    """Apply the perturbation in place to stock column j at last row e; False if not applicable."""
+def _perturb(fields: dict, j: int, e: int, spec: InputSpec, delta: float, sigma: float, lag: int = 0) -> bool:
+    """Apply the perturbation in place to stock column j at last row e (field inputs: at row e - lag, the
+    most recent value the formula reads); False if not applicable."""
     if not np.isfinite(sigma) or sigma <= 0:
         return False
     if spec.kind in ("field", "abn_vol"):
         f = spec.field or "volume"
         x = fields[f]
-        if not np.isfinite(x[e, j]) or x[e, j] <= 0:
+        r = e - lag
+        if r < 0 or not np.isfinite(x[r, j]) or x[r, j] <= 0:
             return False
-        x[e, j] *= np.exp(delta * sigma)
+        x[r, j] *= np.exp(delta * sigma)
         return True
     c = fields["close"]
     if spec.kind == "ret":
@@ -140,7 +143,8 @@ def sample_contexts(ctx, valid: np.ndarray, n: int, seed: int) -> list[tuple[int
 def nudge_test(node: Node, ctx, spec: InputSpec, direction: str, window: str = "train",
                scope_mask: np.ndarray | None = None, delta_sigma: float | None = None,
                n_contexts: int | None = None, bounds: tuple[float, float] | None = None,
-               seed: int | None = None) -> Verdict:
+               seed: int | None = None, lag: int = 0) -> Verdict:
+    """``lag``: for field inputs, perturb x_{t-lag} (the most recent value the formula reads, §10.2)."""
     cfg = ctx.thr["nudge"]
     delta = cfg["delta_sigma"] if delta_sigma is None else delta_sigma
     n = ctx.n_contexts() if n_contexts is None else n_contexts
@@ -173,7 +177,7 @@ def nudge_test(node: Node, ctx, spec: InputSpec, direction: str, window: str = "
         groups = [js] if not has_xs else [[j] for j in js]
         for g in groups:
             fields = {k: v.copy() for k, v in sub.fields.items()}
-            applied = [j for j in g if _perturb(fields, j, e, spec, delta, float(sigma[j]))]
+            applied = [j for j in g if _perturb(fields, j, e, spec, delta, float(sigma[j]), lag)]
             if not applied:
                 continue
             pert = ctx.executor.evaluate(node, sub.with_fields(**fields))[e]
@@ -189,6 +193,8 @@ def nudge_test(node: Node, ctx, spec: InputSpec, direction: str, window: str = "
     n_nz = int(nz.sum())
     ev = {"n_contexts": int(d.size), "n_nonzero": n_nz, "share_zero": float(1 - n_nz / d.size), "delta_sigma": delta,
           "input": spec.raw, "kind": spec.kind, "claimed_direction": direction}
+    if lag:
+        ev["perturbed_lag"] = lag
     if n_nz == 0:
         return Verdict(REFUTED, "nudge", {**ev, "reason": "signal does not respond to the input"})
     lo, hi = clopper_pearson(k_dir, n_nz, cfg["confidence"])

@@ -1,16 +1,22 @@
-"""Performance claims (C4, §10.4) — out of sample only (test window and post-cutoff window H_post).
+"""Performance claims (C4, §10.4) — out of sample only: the test window and, separately, the post-cutoff
+window H_post (§5.2; an H_post shorter than 6 months is reported as exploratory).
 
-* "significant / robust": HLZ t > 3.0 on the OOS mean RankIC or long-short return (Newey-West)
-* Sharpe-type claims: Deflated Sharpe Ratio with the actual number of trials (Bailey & Lopez de Prado 2014)
-* families of candidates: PBO via CSCV (S = 16), White (2000) Reality Check, Hansen (2005) SPA,
-  Romano-Wolf (2005) stepdown
-* transaction costs (CN 5 bp buy / 15 bp sell; US 5 bp sell; 15 bp per trade sensitivity) and
-  China limit-locked days treated as untradable.
+* "significant / robust": SUPPORTED iff the OOS Newey-West t (mean RankIC or long-short return) exceeds
+  the HLZ bar 3.0; REFUTED iff the 95% interval of that t (t +/- 1.96) lies entirely at or below the bar;
+  otherwise UNRESOLVED.  Whether t > 2.0 is reported, never used for verdicts (§10.6).
+* Sharpe-type claims: Deflated Sharpe Ratio with the recorded number of trials and the variance of the
+  logged candidates' Sharpe ratios on their selection window (Bailey & Lopez de Prado 2014)
+* families of candidates (P1-mined, P3a GP): PBO via CSCV (S = 16) — ``family_report``; "best of"
+  claims: Romano-Wolf (2005) stepdown decides, White (2000) Reality Check / Hansen (2005) SPA reported
+* transaction costs (AlphaAgent convention: CN 5 bp buy / 15 bp sell; US 5 bp sell) decide; Alpha
+  Jungle's 15 bp per trade is reported as sensitivity; China limit-locked days are untradable.
 """
 from __future__ import annotations
 
 import itertools
+import json
 import math
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -73,7 +79,7 @@ def expected_max_sharpe(var_trials: float, n_trials: int) -> float:
         return 0.0
     z1 = sps.norm.ppf(1 - 1.0 / n_trials)
     z2 = sps.norm.ppf(1 - 1.0 / (n_trials * math.e))
-    return math.sqrt(max(var_trials, 0.0)) * ((1 - EULER_GAMMA) * z1 + EULER_GAMMA * z2)
+    return float(math.sqrt(max(var_trials, 0.0)) * ((1 - EULER_GAMMA) * z1 + EULER_GAMMA * z2))
 
 
 def deflated_sharpe_ratio(returns: np.ndarray, n_trials: int, var_trials: float) -> dict:
@@ -180,68 +186,374 @@ def romano_wolf(D: np.ndarray, n_boot: int = 1000, seed: int = 0) -> dict:
     return {"t": tstat.tolist(), "p_adjusted": adj.tolist()}
 
 
-# ------------------------------------------------------------------------------- PERF claims
-def oos_windows(ctx) -> list[str]:
-    out = []
-    if ctx.has_window("test"):
-        out.append("test")
-    if "post" in ctx.windows and ctx.has_window("post"):
-        start, end = ctx.windows["post"]
-        months = (pd.Timestamp(end) - pd.Timestamp(start)).days / 30.44
-        if months >= ctx.thr["performance"]["min_post_cutoff_months"]:
-            out.append("post")
+# ------------------------------------------------------------------------------- recorded trials (§10.4)
+SELECTION_WINDOW = {"P1": "valid", "P3a": "train"}      # where each protocol selected its candidates (§7.1)
+
+
+def trial_family_key(rec: dict) -> str | None:
+    """Mining run a record was selected from: ``meta.trial_family``; else one GP run per P3a seed; else the
+    record's own refinement log (P1-mined)."""
+    meta = rec.get("meta") or {}
+    if meta.get("trial_family"):
+        return str(meta["trial_family"])
+    if rec.get("pool") == "P3a":
+        return f"P3a-seed{rec.get('seed')}"
+    if meta.get("trial_log"):
+        return str(rec["formula_id"])
+    return None
+
+
+def _log_formulas(rows) -> list[str]:
+    return [str(t["formula"]) for t in rows or [] if t.get("formula") and t.get("valid", True) is not False]
+
+
+def read_trial_logs(path: str | Path) -> dict[str, list[str]]:
+    """JSONL rows {"family": key (or "formula_id"), "formula": dsl, ...} -> family -> candidate formulas."""
+    out: dict[str, list[str]] = {}
+    with open(path, encoding="utf-8") as fh:
+        for line in fh:
+            if line.strip():
+                r = json.loads(line)
+                key = r.get("family") or r.get("formula_id")
+                if key and r.get("formula") and r.get("valid", True) is not False:
+                    out.setdefault(str(key), []).append(str(r["formula"]))
     return out
 
 
-def verify_perf(f: np.ndarray, ctx, metric: str = "IC", level: str = "high", n_trials: int = 1,
-                var_trials: float = 0.0) -> Verdict:
+def trial_formulas(rec: dict, trial_logs: dict[str, list[str]] | None = None) -> list[str]:
+    """Candidate formulas logged behind a record (deduplicated, the record's own formula included)."""
+    meta = rec.get("meta") or {}
+    cands = _log_formulas(meta.get("trial_log"))
+    key = trial_family_key(rec)
+    if trial_logs and key in trial_logs:
+        cands += trial_logs[key]
+    if not cands and meta.get("trial_log_path") and Path(meta["trial_log_path"]).exists():
+        cands = read_trial_logs(meta["trial_log_path"]).get(key, [])
+    if cands:
+        cands = cands + [rec["dsl"]]
+    return list(dict.fromkeys(cands))
+
+
+def evaluate_uncached(ctx, formula: str) -> np.ndarray:
+    """Evaluate a logged candidate without filling the context's signal cache (families can be large)."""
+    import warnings
+
+    from dsl import parse
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)
+        return ctx.executor.evaluate(parse(formula), ctx.panel)
+
+
+def candidate_returns(formulas: list[str], ctx, rows: np.ndarray, costs_bp: dict | None = None,
+                      per_trade_bp: float | None = None,
+                      min_coverage: float = 0.8) -> tuple[np.ndarray, list[str], list[str]]:
+    """(T_w, N) net daily long-short returns of candidate formulas on ``rows`` (sign-aligned by their mean
+    RankIC on the same rows, as the selection did); candidates that do not parse or cover < min_coverage of
+    the days are skipped.  Days without a position count as flat (0)."""
+    fwd = ctx.fwd(1, "open_t+1")
+    cols, kept, skipped = [], [], []
+    for fml in formulas:
+        try:
+            sig = evaluate_uncached(ctx, fml)
+        except Exception:                          # noqa: BLE001 - unparsable / invalid logged candidate
+            skipped.append(fml)
+            continue
+        s = np.sign(np.nanmean(daily_spearman(sig, fwd, rows))) if np.isfinite(sig[rows]).any() else 0.0
+        if not np.isfinite(s) or s == 0:
+            s = 1.0
+        net = long_short_backtest(s * sig, ctx, rows, costs_bp=costs_bp, per_trade_bp=per_trade_bp)["net"][rows]
+        if np.isfinite(net).mean() < min_coverage:
+            skipped.append(fml)
+            continue
+        cols.append(np.nan_to_num(net, nan=0.0))
+        kept.append(fml)
+    M = np.column_stack(cols) if cols else np.zeros((int(rows.sum()), 0))
+    return M, kept, skipped
+
+
+def trial_sharpe_stats(formulas: list[str], ctx, window: str = "train") -> dict:
+    """Variance of the per-period net Sharpe ratios of the logged candidates on their selection window."""
+    if not formulas or not ctx.has_window(window):
+        return {"var_trials": None, "n_evaluated": 0, "window": window}
+    M, kept, skipped = candidate_returns(formulas, ctx, ctx.rows(window))
+    srs = np.array([sharpe(M[:, k]) for k in range(M.shape[1])])
+    srs = srs[np.isfinite(srs)]
+    var = float(np.var(srs, ddof=1)) if len(srs) >= 2 else None
+    return {"var_trials": var, "n_evaluated": int(len(srs)), "n_skipped": len(skipped), "window": window}
+
+
+def record_trials(rec: dict | None, ctx, trial_logs: dict[str, list[str]] | None = None,
+                  cache: dict | None = None) -> dict:
+    """The recorded search behind a formula record (§10.4): number of trials (``rec['trials']``), the
+    variance of the logged candidates' Sharpe ratios (None when no candidate log is available) and the
+    candidate formulas themselves (for "best of" claims).  ``cache`` shares a family's statistics across
+    the records selected from it (one GP run -> many P3a formulas)."""
+    if not rec:
+        return {"n_trials": 1, "var_trials": 0.0, "formulas": [], "source": "no record"}
+    cands = trial_formulas(rec, trial_logs)
+    n = rec.get("trials")
+    n = int(n) if n else max(1, len(cands))
+    out = {"n_trials": n, "formulas": cands, "family": trial_family_key(rec), "source": "record"}
+    if n <= 1:
+        out.update(var_trials=0.0)
+    else:
+        w = SELECTION_WINDOW.get(rec.get("pool"), "train")
+        w = w if ctx.has_window(w) else "train"
+        key = (out["family"], w, hash(tuple(sorted(set(cands)))))
+        if cache is None or key not in cache:
+            st = trial_sharpe_stats(cands, ctx, w)
+            if cache is not None:
+                cache[key] = st
+        st = dict(cache[key]) if cache is not None else st
+        out.update(var_trials=st.pop("var_trials"), trial_sharpe=st)
+    return out
+
+
+# ------------------------------------------------------------------------------- PERF claims
+def oos_windows(ctx) -> list[str]:
+    """Out-of-sample windows: test and H_post (kept even when shorter than 6 months — exploratory)."""
+    out = [w for w in ("test", "post") if w in ctx.windows and ctx.has_window(w)]
+    return out
+
+
+def post_exploratory(ctx) -> bool:
+    """§5.2: H_post shorter than ``min_post_cutoff_months`` is reported as exploratory."""
+    if "post" not in ctx.windows:
+        return False
+    start, end = ctx.windows["post"]
+    months = (pd.Timestamp(end) - pd.Timestamp(start)).days / 30.44
+    return months < ctx.thr["performance"]["min_post_cutoff_months"]
+
+
+def hlz_verdict(t: float, cfg: dict) -> str | None:
+    """HLZ rule (§10.4, §10.6): SUPPORTED iff t > 3.0; REFUTED iff the 95% interval t +/- z lies entirely
+    at or below 3.0; None (-> UNVERIFIABLE) if t is not finite; otherwise UNRESOLVED."""
+    if not np.isfinite(t):
+        return None
+    bar = cfg["discovery_t"]
+    if t > bar:
+        return SUPPORTED
+    z = float(sps.norm.ppf(0.5 + cfg.get("refute_ci_level", 0.95) / 2))
+    return REFUTED if t + z <= bar else UNRESOLVED
+
+
+def _t_evidence(m: float, se: float, t: float, cfg: dict) -> dict:
+    z = float(sps.norm.ppf(0.5 + cfg.get("refute_ci_level", 0.95) / 2))
+    return {"mean": m, "se": se, "t": t, "t_ci": [t - z, t + z],
+            "t_above_reported_bar": bool(np.isfinite(t) and t > cfg["reported_t"])}   # reported, not a verdict input
+
+
+def _ls_stats(signal: np.ndarray, ctx, rows: np.ndarray, n_trials: int, var_trials: float | None,
+              per_trade_bp: float | None = None) -> dict:
+    bt = long_short_backtest(signal, ctx, rows, per_trade_bp=per_trade_bp)
+    d = deflated_sharpe_ratio(bt["net"], max(1, n_trials), 0.0 if var_trials is None else var_trials)
+    m, se, t = newey_west_mean(bt["net"])
+    return {"dsr": d, "ls_mean_net": m, "ls_se": se, "ls_t": t, "sharpe_net": sharpe(bt["net"]),
+            "mean_turnover": float(np.nanmean(bt["turnover"])) if np.isfinite(bt["turnover"]).any() else float("nan")}
+
+
+def _perf_window(f: np.ndarray, ic: np.ndarray, s: float, ctx, w: str, metric: str, n_trials: int,
+                 var_trials: float | None) -> tuple[str, dict]:
     cfg = ctx.thr["performance"]
-    wins = oos_windows(ctx)
-    if not wins:
-        return Verdict(UNVERIFIABLE, "oos_performance", {"reason": "no out-of-sample window"})
-    metric = (metric or "IC").lower()
-    ev: dict = {"metric": metric, "level": level, "windows": wins}
-    ic = daily_spearman(f, ctx.fwd(1, "open_t+1"))
-    s = np.sign(np.nanmean(ic[ctx.rows("train")])) if ctx.has_window("train") else 1.0
-    s = s or 1.0
+    rows = ctx.rows(w)
     if metric in ("ic", "rankic", "rank_ic", "significance"):
-        ts = {}
-        for w in wins:
-            m, se, t = newey_west_mean(s * ic[ctx.rows(w)])
-            ts[w] = {"mean_ic": float(s * m), "t": t}
-        ev["oos"] = ts
-        t_test = ts["test"]["t"] if "test" in ts else ts[wins[0]]["t"]
-        if all(v["t"] > cfg["discovery_t"] for v in ts.values()):
-            return Verdict(SUPPORTED, "oos_performance", ev)
-        if not np.isfinite(t_test) or t_test < cfg["refute_t"]:
-            return Verdict(REFUTED, "oos_performance", ev)
-        return Verdict(UNRESOLVED, "oos_performance", ev)
+        m, se, t = newey_west_mean(s * ic[rows])
+        ev = {"mean_ic": float(s * m) if np.isfinite(m) else m, **_t_evidence(float(s * m), se, t, cfg)}
+        v = hlz_verdict(t, cfg)
+        return (v or UNVERIFIABLE), (ev if v else {**ev, "reason": "OOS t not computable"})
     if metric == "stability":
-        rows = ctx.rows(wins[0])
         years = ctx.panel.years()
         overall = np.nanmean(s * ic[rows])
         ys = [np.nanmean(s * ic[rows & (years == y)]) for y in np.unique(years[rows])]
-        share = float(np.mean([np.sign(v) == np.sign(overall) for v in ys if np.isfinite(v)]))
-        ev.update({"yearly_mean_ic": [float(v) for v in ys], "same_sign_share": share})
+        ys_ok = [v for v in ys if np.isfinite(v)]
+        if not ys_ok or not np.isfinite(overall):
+            return UNVERIFIABLE, {"reason": "no finite yearly IC"}
+        share = float(np.mean([np.sign(v) == np.sign(overall) for v in ys_ok]))
+        ev = {"yearly_mean_ic": [float(v) for v in ys], "same_sign_share": share}
         if share >= cfg["stability_supported_share"]:
-            return Verdict(SUPPORTED, "oos_performance", ev)
+            return SUPPORTED, ev
         if share <= cfg["stability_refuted_share"]:
-            return Verdict(REFUTED, "oos_performance", ev)
-        return Verdict(UNRESOLVED, "oos_performance", ev)
-    if metric in ("sharpe", "returns", "return"):
-        bt = long_short_backtest(s * f, ctx, ctx.rows(wins[0]))
-        d = deflated_sharpe_ratio(bt["net"], max(1, n_trials), var_trials)
-        m, se, t = newey_west_mean(bt["net"])
-        ev.update({"dsr": d, "ls_t": t, "mean_turnover": float(np.nanmean(bt["turnover"]))})
-        if metric == "sharpe":
-            if d.get("dsr", np.nan) >= cfg["dsr_supported"]:
-                return Verdict(SUPPORTED, "oos_performance", ev)
-            if not np.isfinite(d.get("dsr", np.nan)) or d["dsr"] < cfg["dsr_refuted"]:
-                return Verdict(REFUTED, "oos_performance", ev)
-            return Verdict(UNRESOLVED, "oos_performance", ev)
-        if t > cfg["discovery_t"]:
-            return Verdict(SUPPORTED, "oos_performance", ev)
-        if not np.isfinite(t) or t < cfg["refute_t"]:
-            return Verdict(REFUTED, "oos_performance", ev)
-        return Verdict(UNRESOLVED, "oos_performance", ev)
-    return Verdict(UNVERIFIABLE, "oos_performance", {"reason": f"unknown metric {metric!r}"})
+            return REFUTED, ev
+        return UNRESOLVED, ev
+    # Sharpe / return claims: AlphaAgent cost convention decides; 15 bp per trade is the sensitivity
+    main = _ls_stats(s * f, ctx, rows, n_trials, var_trials)
+    sens = _ls_stats(s * f, ctx, rows, n_trials, var_trials, per_trade_bp=cfg["costs_bp"]["sensitivity_per_trade"])
+    ev = {**main, "costs": ctx.thr["performance"]["costs_bp"].get(ctx.panel.market, {"buy": 0, "sell": 5}),
+          "cost_sensitivity": {"per_trade_bp": cfg["costs_bp"]["sensitivity_per_trade"], **sens},
+          **{k: v for k, v in _t_evidence(main["ls_mean_net"], main["ls_se"], main["ls_t"], cfg).items()
+             if k in ("t_ci", "t_above_reported_bar")}}
+    if metric == "sharpe":
+        dsr = main["dsr"].get("dsr", float("nan"))
+        if not np.isfinite(dsr):
+            return UNVERIFIABLE, {**ev, "reason": "DSR not computable (too few OOS days)"}
+        if var_trials is None and n_trials > 1:
+            # no candidate log: SR0 unknown; the undeflated PSR bounds the DSR from above
+            ev["dsr_note"] = f"{n_trials} recorded trials but no candidate log: SR0 unknown, DSR <= PSR = {dsr:.3f}"
+            return (REFUTED if dsr < cfg["dsr_refuted"] else UNRESOLVED), ev
+        if dsr >= cfg["dsr_supported"]:
+            return SUPPORTED, ev
+        if dsr < cfg["dsr_refuted"]:
+            return REFUTED, ev
+        return UNRESOLVED, ev
+    v = hlz_verdict(main["ls_t"], cfg)
+    return (v or UNVERIFIABLE), (ev if v else {**ev, "reason": "OOS t not computable"})
+
+
+def _by_window(ctx, fn, method: str, base_ev: dict) -> Verdict:
+    """Primary verdict on the test window; H_post decided separately and reported (§10.4)."""
+    wins = oos_windows(ctx)
+    post_ev = {"post_window": list(ctx.windows["post"]) if "post" in ctx.windows else None,
+               "post_status": getattr(ctx, "post_status", None)}
+    if not wins:
+        return Verdict(UNVERIFIABLE, method, {**base_ev, **post_ev, "reason": "no out-of-sample window"})
+    by = {}
+    for w in wins:
+        v, ev = fn(w)
+        by[w] = {"verdict": v, **ev}
+        if w == "post":
+            by[w]["exploratory"] = post_exploratory(ctx)
+    primary = "test" if "test" in by else wins[0]
+    ev = {**base_ev, "windows": wins, "primary_window": primary, "by_window": by, **post_ev,
+          **{k: v for k, v in by[primary].items() if k != "verdict"}}
+    if "post" in by:
+        ev["post_verdict"] = by["post"]["verdict"]
+        ev["post_exploratory"] = by["post"]["exploratory"]
+    return Verdict(by[primary]["verdict"], method, ev)
+
+
+def verify_perf(f: np.ndarray, ctx, metric: str = "IC", level: str = "high", n_trials: int = 1,
+                var_trials: float | None = 0.0, trials: dict | None = None) -> Verdict:
+    """``trials`` (``record_trials``) overrides ``n_trials`` / ``var_trials``; ``var_trials=None`` means
+    the recorded trials have no candidate log (DSR cannot be deflated: only refutation is decidable)."""
+    if trials is not None:
+        n_trials, var_trials = int(trials.get("n_trials", 1)), trials.get("var_trials", 0.0)
+    metric = (metric or "IC").lower()
+    if metric not in ("ic", "rankic", "rank_ic", "significance", "stability", "sharpe", "returns", "return"):
+        return Verdict(UNVERIFIABLE, "oos_performance", {"reason": f"unknown metric {metric!r}"})
+    ic = daily_spearman(f, ctx.fwd(1, "open_t+1"))
+    tr = ic[ctx.rows("train")] if ctx.has_window("train") else ic[:0]
+    s = np.sign(np.nanmean(tr)) if np.isfinite(tr).any() else 1.0
+    s = s if np.isfinite(s) and s != 0 else 1.0
+    base = {"metric": metric, "level": level, "n_trials": n_trials, "var_trials": var_trials,
+            "trials_source": (trials or {}).get("source", "not supplied: n_trials / var_trials arguments"),
+            **({"trial_sharpe": trials["trial_sharpe"]} if trials and "trial_sharpe" in trials else {})}
+    return _by_window(ctx, lambda w: _perf_window(f, ic, s, ctx, w, metric, n_trials, var_trials), "oos_performance", base)
+
+
+# ------------------------------------------------------------------------------- "best of" claims
+def best_of_set(ctx, text: str) -> str | None:
+    """Codebook ``best_of_sets``: 'library' (every same-panel reference characteristic) or 'candidates'
+    (the formula's logged mining candidates) when the claim's ref / level names a set (exact match)."""
+    t = str(text).strip().lower()
+    for name, words in (ctx.cb.get("best_of_sets") or {}).items():
+        if t == name or t in [w.lower() for w in words]:
+            return name
+    return None
+
+
+def _competitors(f: np.ndarray, ctx, which: str, trials: dict | None) -> tuple[dict[str, np.ndarray], str | None]:
+    if which == "library":
+        return {n: ctx.references.signal(n) for n in ctx.references.characteristic_names()}, None
+    forms = (trials or {}).get("formulas") or []
+    if not forms:
+        return {}, "no candidate log for this formula (trial log not recorded)"
+    out = {}
+    for fml in forms:
+        try:
+            g = evaluate_uncached(ctx, fml)
+        except Exception:                          # noqa: BLE001
+            continue
+        if g.shape == f.shape and np.array_equal(np.nan_to_num(g, nan=1e300), np.nan_to_num(f, nan=1e300)):
+            continue                               # the formula itself
+        out[fml] = g
+    return out, None if out else "no evaluable competitor"
+
+
+def verify_best_of(f: np.ndarray, ctx, which: str, metric: str = "IC", trials: dict | None = None) -> Verdict:
+    """"Best of a set" claims (§10.4): daily OOS differentials d_k = perf(f) - perf(g_k) against every
+    member g_k of the set (RankIC, or net long-short return for Sharpe/return metrics; each sign-aligned by
+    its training-window RankIC).  Romano-Wolf stepdown decides: SUPPORTED iff every H0_k: E[d_k] <= 0 is
+    rejected at FWER alpha; REFUTED iff some member is significantly better (stepdown on -d); else
+    UNRESOLVED.  White's Reality Check and Hansen's SPA p-values (H0: no member beats f) are reported, and
+    for the candidate family the SPA of its best member against a zero benchmark."""
+    comps, why = _competitors(f, ctx, which, trials)
+    base = {"set": which, "metric": metric, "n_competitors": len(comps)}
+    if why:
+        return Verdict(UNVERIFIABLE, "best_of", {**base, "reason": why})
+    cfg = ctx.thr["performance"]
+    alpha = float(cfg.get("best_of_alpha", 0.05))
+    fwd = ctx.fwd(1, "open_t+1")
+    tr = ctx.rows("train") if ctx.has_window("train") else np.ones(ctx.panel.T, dtype=bool)
+    metric_l = (metric or "IC").lower()
+
+    def aligned(x):
+        ic = daily_spearman(x, fwd)
+        sg = np.sign(np.nanmean(ic[tr]))
+        return (sg if np.isfinite(sg) and sg != 0 else 1.0), ic
+
+    sf, ic_f = aligned(f)
+    al = {k: aligned(g) for k, g in comps.items()}
+
+    def run(w):
+        rows = ctx.rows(w)
+        if metric_l in ("sharpe", "returns", "return"):
+            perf = lambda x, s: long_short_backtest(s * x, ctx, rows)["net"][rows]   # noqa: E731
+            pf = perf(f, sf)
+            cols = {k: perf(comps[k], s) for k, (s, _) in al.items()}
+        else:
+            pf = sf * ic_f[rows]
+            cols = {k: s * ic[rows] for k, (s, ic) in al.items()}
+        names = [k for k, c in cols.items() if (np.isfinite(c) & np.isfinite(pf)).mean() >= 0.8]
+        if not names:
+            return UNVERIFIABLE, {"reason": "no competitor covers the window"}
+        D = np.column_stack([pf - cols[k] for k in names])
+        keep = np.all(np.isfinite(D), axis=1)
+        if keep.sum() < 30:
+            return UNVERIFIABLE, {"reason": "too few common OOS days"}
+        D = D[keep]
+        nb = ctx.n_boot()
+        rw = romano_wolf(D, nb, ctx.seed)
+        rw_neg = romano_wolf(-D, nb, ctx.seed)
+        ev = {"competitors": names[:50], "n_used": len(names), "alpha": alpha,
+              "rw_p_adjusted_max": float(max(rw["p_adjusted"])), "rw_better_than_all": bool(max(rw["p_adjusted"]) <= alpha),
+              "rw_p_member_better_min": float(min(rw_neg["p_adjusted"])),
+              "reality_check_p_member_better": white_reality_check(-D, nb, ctx.seed)["p_value"],
+              "spa_p_member_better": hansen_spa(-D, nb, ctx.seed)["p_value"],
+              "mean_diff": D.mean(axis=0).tolist()[:50]}
+        if which == "candidates":
+            F = np.column_stack([pf[keep]] + [cols[k][keep] for k in names])
+            ev["spa_best_vs_zero_p"] = hansen_spa(F, nb, ctx.seed)["p_value"]
+        if max(rw["p_adjusted"]) <= alpha:
+            return SUPPORTED, ev
+        if min(rw_neg["p_adjusted"]) <= alpha:
+            return REFUTED, ev
+        return UNRESOLVED, ev
+
+    return _by_window(ctx, run, "best_of", base)
+
+
+# ------------------------------------------------------------------------------- families (PBO)
+def family_report(formulas: list[str], ctx, window: str = "train", S: int | None = None) -> dict:
+    """§10.4 family-level statistics for a mining run's logged candidates on its selection window: PBO via
+    CSCV (S partitions, net returns under the AlphaAgent cost convention and at 15 bp per trade), and
+    White RC / Hansen SPA p-values of the best candidate against a zero benchmark."""
+    cfg = ctx.thr["performance"]
+    S = int(S or cfg["pbo_partitions"])
+    if not ctx.has_window(window):
+        return {"status": "not_run", "reason": f"no {window!r} window"}
+    rows = ctx.rows(window)
+    M, kept, skipped = candidate_returns(formulas, ctx, rows)
+    out = {"window": window, "n_logged": len(formulas), "n_evaluated": len(kept), "n_skipped": len(skipped), "S": S}
+    if M.shape[1] < 2:
+        return {**out, "status": "not_run", "reason": "fewer than 2 evaluable candidates"}
+    out["pbo"] = pbo_cscv(M, S=S)
+    M15, _, _ = candidate_returns(kept, ctx, rows, per_trade_bp=cfg["costs_bp"]["sensitivity_per_trade"])
+    out["pbo_cost_sensitivity"] = {"per_trade_bp": cfg["costs_bp"]["sensitivity_per_trade"], **pbo_cscv(M15, S=S)}
+    srs = np.array([sharpe(M[:, k]) for k in range(M.shape[1])])
+    nb = ctx.n_boot()
+    out.update({"status": "ok", "best_formula": kept[int(np.nanargmax(srs))], "best_sharpe": float(np.nanmax(srs)),
+                "var_sharpe": float(np.nanvar(srs, ddof=1)),
+                "reality_check_p": white_reality_check(M, nb, ctx.seed)["p_value"],
+                "spa_p": hansen_spa(M, nb, ctx.seed)["p_value"]})
+    return out

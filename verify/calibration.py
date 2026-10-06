@@ -105,7 +105,10 @@ def build_planted_set(ctx: VerificationContext, n_target: int = 300, seed: int =
     for f, inp, dirn in (("CSRank($close/$open)", "close", "+"), ("CSRank($close/$open)", "open", "-"),
                          ("Log($volume+1)", "volume", "+"), ("Mean($volume, 20)/($volume+1e-12)", "volume", "-"),
                          ("($high-$low)/$close", "high", "+"), ("($high-$low)/$close", "low", "-"),
-                         ("-1*$amount/Mean($amount, 10)", "amount", "-"), ("TsRank($vwap, 10)", "vwap", "+")):
+                         ("-1*$amount/Mean($amount, 10)", "amount", "-"), ("TsRank($vwap, 10)", "vwap", "+"),
+                         # fields read only through lagged leaves: Ref preserves (§10.2)
+                         ("Ref($close, 5)", "close", "+"), ("-1*Ref($volume, 3)", "volume", "-"),
+                         ("CSRank(Ref($close, 2)/Ref($open, 2))", "open", "-")):
         add("direction_field", STATIC, {"predicate": "SIGN", "args": {"input": inp, "direction": dirn}}, SUPPORTED, f)
         add("direction_field", STATIC, {"predicate": "SIGN", "args": {"input": inp, "direction": "-" if dirn == "+" else "+"}}, REFUTED, f)
 
@@ -123,7 +126,8 @@ def build_planted_set(ctx: VerificationContext, n_target: int = 300, seed: int =
         add("dependence", STATIC, {"predicate": "DEPENDS_ON", "args": {"input": "analyst revisions"}}, REFUTED, f)
         add("dependence", STATIC, {"predicate": "DEPENDS_ON", "args": {"input": "earnings"}}, REFUTED, f)
 
-    # 3. Lookback (Mean(x,20) vs Mean(x,60); nested Ref/Mean path sums)
+    # 3. Lookback (Mean(x,20) vs Mean(x,60); nested Ref/Mean path sums). The claimed n is compared with the
+    #    effective lookback L only (n = L or L + 1); inner window parameters do not count (§10.2).
     for n, other in ((20, 60), (5, 10), (60, 20), (10, 30)):
         f = f"Mean($close, {n})/$close"
         add("lookback", STATIC, {"predicate": "LOOKBACK", "args": {"window": n}}, SUPPORTED, f)
@@ -134,8 +138,17 @@ def build_planted_set(ctx: VerificationContext, n_target: int = 300, seed: int =
         add("lookback_nested", STATIC, {"predicate": "LOOKBACK", "args": {"window": L + 1}}, SUPPORTED, f)
         add("lookback_nested", STATIC, {"predicate": "LOOKBACK", "args": {"window": L + 7}}, REFUTED, f)
         add("horizon", STATIC, {"predicate": "HORIZON", "args": {"bin": "long"}}, REFUTED, f)
+    f = "Mean(Ref($close, 60), 5)/$close"                 # L = 64: neither inner parameter is the lookback
+    for n, exp in ((5, REFUTED), (60, REFUTED), (64, SUPPORTED), (65, SUPPORTED)):
+        add("lookback_nested", STATIC, {"predicate": "LOOKBACK", "args": {"window": n}}, exp, f)
     add("horizon", STATIC, {"predicate": "HORIZON", "args": {"bin": "short"}}, SUPPORTED, "Mean($close, 5)/$close")
     add("horizon", STATIC, {"predicate": "HORIZON", "args": {"bin": "medium"}}, SUPPORTED, "Ref($close, 21)/Ref($close, 120)")
+    # horizon bins apply to the effective lookback L (<= 5 / <= 21 / 22-126 / > 126), incl. the bin edges
+    for d, good, bad in ((5, "very_short", "medium"), (21, "short", "medium"), (22, "medium", "short"),
+                         (126, "medium", "long"), (127, "long", "medium")):
+        f = f"-1*($close/Ref($close, {d})-1)"
+        add("horizon_edge", STATIC, {"predicate": "HORIZON", "args": {"bin": good}}, SUPPORTED, f)
+        add("horizon_edge", STATIC, {"predicate": "HORIZON", "args": {"bin": bad}}, REFUTED, f)
 
     # 4. Cross-sectional (with / without CSRank at the root)
     for inner in ("Mean($close, 5)/$close", "Corr($close, $volume, 10)", "Std($close, 20)/$close",
@@ -160,6 +173,12 @@ def build_planted_set(ctx: VerificationContext, n_target: int = 300, seed: int =
                            ("Log($volume+1)", 0, 1, REFUTED), ("TsRank($close, 10)", 0, 1, SUPPORTED),
                            ("Sign($close-$open)", -1, 1, SUPPORTED), ("$volume/Mean($volume, 5)", -1, 0, REFUTED)):
         add("range", STATIC, {"predicate": "RANGE", "args": {"low": lo, "high": hi}}, exp, f)
+
+    # 6b. Invariance: one constant c multiplies all prices (volumes) (§10.2 metamorphic relations)
+    for f, inp, exp in (("CSRank($close)", "price", SUPPORTED), ("$close/Mean($close, 10)", "price", SUPPORTED),
+                        ("$close-Mean($close, 5)", "price", REFUTED), ("Log($close)", "price", REFUTED),
+                        ("CSRank($volume)", "volume", SUPPORTED), ("Log($volume+1)", "volume", REFUTED)):
+        add("invariance", STATIC, {"predicate": "INVARIANT", "args": {"transform": "scale", "input": inp}}, exp, f)
 
     # 7-8. Resemblance / independence on planted signals
     sigs = planted_signals(ctx)

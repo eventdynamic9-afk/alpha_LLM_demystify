@@ -1,6 +1,9 @@
-"""Metamorphic relations (§10.2): price / volume scaling (global and per stock), log-price shift,
-stock permutation (cross-sectional equivariance), date shift (time equivariance) and field ablation.
-Each relation either holds exactly or yields a violation magnitude; INVARIANT claims are decided here."""
+"""Metamorphic relations (§10.2): price / volume scaling by one constant c > 0, log-price shift, stock
+permutation (cross-sectional equivariance), date shift (time equivariance) and field ablation.  Each
+relation either holds exactly or yields a violation magnitude; INVARIANT claims are decided here.
+
+``INVARIANT(scale, price|volume)`` is decided by the global relations ("multiply all prices by c");
+the per-stock scalings (an independent c_i ~ U(0.5, 2) per stock) are extra, reported-only relations."""
 from __future__ import annotations
 
 import numpy as np
@@ -40,13 +43,14 @@ def relation(node: Node, ctx, name: str, seed: int = 0) -> dict:
     base = ctx.signal(node)
     rng = np.random.default_rng(seed)
     tol = ctx.thr["metamorphic"]["violation_rel_tol"]
+    c_glob = np.float64(ctx.thr["metamorphic"].get("scale_c", 1.7))
     if name == "price_scale_global":
-        other = ex.evaluate(node, _scaled(p, PRICE + ("amount",), np.float64(1.7)))
+        other = ex.evaluate(node, _scaled(p, PRICE + ("amount",), c_glob))
     elif name == "price_scale_per_stock":
         c = rng.uniform(0.5, 2.0, p.N)[None, :]
         other = ex.evaluate(node, _scaled(p, PRICE + ("amount",), c))
     elif name == "volume_scale_global":
-        other = ex.evaluate(node, _scaled(p, ("volume", "amount"), np.float64(1.7)))
+        other = ex.evaluate(node, _scaled(p, ("volume", "amount"), c_glob))
     elif name == "volume_scale_per_stock":
         c = rng.uniform(0.5, 2.0, p.N)[None, :]
         other = ex.evaluate(node, _scaled(p, ("volume", "amount"), c))
@@ -97,9 +101,11 @@ def field_ablation(node: Node, ctx, fieldname: str, window: str = "all") -> dict
     return {"magnitude": float(max(0.0, 1.0 - m)), "mean_rank_corr": m}
 
 
-_TRANSFORMS = {("scale", "price"): "price_scale_per_stock", ("scale", "volume"): "volume_scale_per_stock",
-               ("scale", "prices"): "price_scale_per_stock", ("shift", "log_price"): "log_price_shift",
+_TRANSFORMS = {("scale", "price"): "price_scale_global", ("scale", "volume"): "volume_scale_global",
+               ("scale", "prices"): "price_scale_global", ("shift", "log_price"): "log_price_shift",
                ("shift", "time"): "date_shift", ("permutation", "stocks"): "stock_permutation"}
+# extra relations reported next to the deciding one (never used for the verdict)
+_REPORTED = {"price_scale_global": "price_scale_per_stock", "volume_scale_global": "volume_scale_per_stock"}
 
 
 def verify_invariant(node: Node, ctx, transform: str, input_: str) -> Verdict:
@@ -110,6 +116,9 @@ def verify_invariant(node: Node, ctx, transform: str, input_: str) -> Verdict:
     dev = relation(node, ctx, rel)
     cfg = ctx.thr["metamorphic"]
     ev = {"relation": rel, **dev}
+    if rel in _REPORTED:
+        extra = relation(node, ctx, _REPORTED[rel])
+        ev["reported_relations"] = {_REPORTED[rel]: {k: extra[k] for k in ("max_rel_dev", "violation_share", "n")}}
     if dev["n"] == 0:
         return Verdict(UNVERIFIABLE, "metamorphic", ev)
     if dev["nan_mismatch"] == 0 and dev["max_rel_dev"] <= cfg["exact_rel_tol"]:
