@@ -282,3 +282,55 @@ def to_program(node: Node, min_size: int = 3, notation: str = "qlib", names: str
     lines = [f"{label[n]} = {render(n)}" for n in order]
     lines.append(f"factor = {render(node)}")
     return "\n".join(lines)
+
+
+# ------------------------------------------------------------------------------------------ gtja
+_GTJA = {"CSRank": "RANK", "TsRank": "TSRANK", "Ref": "DELAY", "Delta": "DELTA", "Corr": "CORR",
+         "Cov": "COVIANCE", "Std": "STD", "Sum": "SUM", "Mean": "MEAN", "Max": "TSMAX", "Min": "TSMIN",
+         "Greater": "MAX", "Less": "MIN", "Abs": "ABS", "Log": "LOG", "Sign": "SIGN", "WMA": "DECAYLINEAR"}
+
+
+def to_gtja(node: Node) -> str:
+    """GTJA-191 notation (upper case; MAX/MIN elementwise, TSMAX/TSMIN rolling).  Operators without a
+    GTJA name raise ValueError (callers fall back to another notation)."""
+    return _g(node)
+
+
+def _g(n: Node) -> str:
+    if n.is_field:
+        return n.name.upper()
+    if n.is_const:
+        s = fmt_num(n.value)
+        return f"({s})" if n.value < 0 else s
+    if _is_returns(n):
+        return "RET"
+    s = OPS[n.op]
+    if n.op in _INFIX_PREC:
+        return f"({_g(n.children[0])} {s.infix} {_g(n.children[1])})"
+    if n.op == "Neg":
+        return f"(-1 * {_g(n.children[0])})"
+    if n.op == "If":
+        c, x, y = (_g(ch) for ch in n.children)
+        return f"({c} ? {x} : {y})"
+    if n.op == "Power":
+        return f"({_g(n.children[0])} ^ {fmt_num(n.params[0])})"
+    if n.op not in _GTJA:
+        raise ValueError(f"{n.op} has no GTJA-191 name")
+    args = [_g(c) for c in n.children] + [_param_str(p) for p in n.params]
+    return f"{_GTJA[n.op]}({', '.join(args)})"
+
+
+def to_notation(node: Node, notation: str) -> str:
+    """Serialize in 'qlib' | 'alpha101' | 'gtja' | 'math' (gtja falls back to alpha101)."""
+    if notation == "qlib":
+        return to_qlib(node)
+    if notation == "alpha101":
+        return to_alpha101(node)
+    if notation == "math":
+        return to_math(node)
+    if notation == "gtja":
+        try:
+            return to_gtja(node)
+        except ValueError:
+            return to_alpha101(node)
+    raise ValueError(notation)
