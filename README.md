@@ -122,37 +122,90 @@ the module and frozen with the thresholds:
   cross-sectional layer). `executors/e1_qlib/qlib_engine.py` runs the real Qlib engine on every
   cross-section-free subtree when `pyqlib` is installed (Python ≤ 3.12); it is untested here.
   `E1Executor(qlib_native=True)` reproduces Qlib's `min_periods=1` and `WMA` normalization.
-* **Canonical NaN, tie and summation rules** (both executors, `executors/semantics.py`): a window is NaN
-  unless all values are present; a window is constant iff max = min (Corr/Rsquare → NaN, Std/Var → 0);
-  tie-sensitive operators compare inputs after rounding to 12 significant digits; cross-sectional
-  normalizers (`CSScale`, `CSZScore`) use correctly rounded sums. These rules make the two independent
-  implementations agree on ties that differ only by floating-point summation order. With them, all 500
-  random composite formulas agree on each of three fixture panels (≥ 491 within 1e-8, the rest by the
-  rank-correlation rule).
+* **Canonical NaN, tie and summation rules** (both executors, `executors/semantics.py`):
+  * A window is NaN unless all its values are present.
+  * A window is constant iff max = min; then Corr/Rsquare are NaN and Std/Var are 0.
+  * Tie-sensitive operators zero same-date summation residues of an exact zero (below 1e-12 of that date's
+    cross-sectional max, so the rule is causal) and compare inputs rounded to 12 significant digits.
+  * `CSScale` and `CSZScore` use correctly rounded sums: E1 uses `math.fsum`; E2 has its own exact-integer
+    implementation, so the code is independent but the results are bit-identical.
+* **Agreement rule (§6.4).** The criterion is max |E1 − E2| ≤ 1e-8. The rank-correlation rule (min daily
+  ρ ≥ 0.9999) applies only "where float order matters", which the code defines as either:
+  * the tree contains an order-dependent operator (ranks, argmax, comparisons, selection, `If`, `Abs`); or
+  * the 99th-percentile relative difference is at floating-point noise (≤ 1e-9), as with sums of share
+    volumes or an ill-conditioned division.
+
+  A wrong constant, a ddof slip or a weighting bug fails both conditions.
+
+  Results:
+  * All 44 operators agree on an edge-case panel with suspensions, cross-stock ties and constant windows.
+  * All 500 random formulas agree, now drawn with every operator.
+  * All 355 library formulas agree.
+  * All 227 formulas of the previous library agree on the real US slice: 222 within 1e-8, 5 by the rank
+    rule.
+* **Numerical equivalence (§6.5).** The denominator is every date on which either signal is evaluable. A
+  date where one side is undefined or constant counts as a failure, and the two signals' coverage must
+  agree to within 1%.
 * `Rsquare` / `Resi` need windows ≥ 3, because a 2-point fit is identically 1 / 0.
-* **Direction claims about a raw field** are defined as raising that field's most recent value; claims
-  about derived quantities (`ret_5d`, volatility, range, abnormal volume) use the pre-registered path
-  perturbations in `verify/nudge.py`.
-* **LOOKBACK** is SUPPORTED when the stated window equals a window/lag parameter of the formula or its
-  effective span (L or L + 1 days).
-* **Codebook terms with several operationalizations** (e.g. short-term reversal = 5d and 21d) are
-  SUPPORTED if any operationalization is SUPPORTED and REFUTED only if all are; independence claims use
-  the reverse rule (refuted if dependence on any operationalization is shown).
+* **Direction claims about a raw field.**
+  * Raising the most recent value of the field that the formula reads: today's value, or the latest
+    lagged leaf when the field enters only through `Ref`.
+  * A claim is REFUTED as "does not depend" only when the field is absent from the dependency set.
+  * Derived quantities (`ret_5d`, volatility, range, abnormal volume) use the pre-registered path
+    perturbations in `verify/nudge.py`.
+* **LOOKBACK / HORIZON** are decided on the effective lookback L (§10.2). LOOKBACK(n) is SUPPORTED iff
+  n ∈ {L, L+1} (`thresholds.lookback.convention`); window parameters are reported as evidence only.
+  HORIZON bins L itself.
+* **INVARIANT(scale)** uses one global constant c = 1.7 (`thresholds.metamorphic.scale_c`). Per-stock
+  scalings are reported, not decided.
+* **Codebook terms with several operationalizations** (e.g. short-term reversal = 5d and 21d) follow the
+  pre-registered any/all rule (Appendix C): SUPPORTED if any operationalization is SUPPORTED, REFUTED only
+  if all are. This applies to INDEPENDENT as well.
+* **Performance claims (§10.4).**
+  * SUPPORTED iff OOS t > 3.0. REFUTED iff the 95% interval t ± 1.96 lies at or below 3.0. This rule is
+    new: the former refute_t = 2.0 is removed, and the change must be logged as a pre-registration
+    amendment.
+  * DSR is deflated by the recorded trial count and by the variance of the logged candidates' Sharpe
+    ratios (`trials_gp.jsonl`, P1 refinement logs).
+  * `verify perf-family` reports PBO/CSCV (S = 16), RC and SPA. "Best of" claims use Romano–Wolf.
+  * Test-window and H_post verdicts are separate; an H_post shorter than 6 months is exploratory.
 * **AlphaLogics' "> 90% agreement"** is operationalized as mean daily pairwise concordance
   (1 + Kendall τ) / 2 > 0.90; the strict rule is ρ ≥ 0.999 on ≥ 99% of dates.
 * **FGX double selection** uses decile portfolios of the reference characteristics as test assets; the
   NOVEL alpha is the HAC t of the formula's long–short return on the union of selected controls.
 * **B5** uses an off-the-shelf NLI cross-encoder when `transformers` is installed; otherwise a
   deterministic surface-matching entailment over the template description of the AST.
+* **Base set (§7.2)** is frozen from `pools.library.select_base_set()`. Per library, 20 formulas are drawn
+  at random within pooled node-count terciles, 7/7/6 as far as availability allows: Alpha101 has no
+  formula in the lowest tercile. Alpha158 contributes at most one window per feature family.
 * **Degenerate published formulas.** The validity filter removes formulas that are constant on the
-  panel — e.g. Alpha101 #7 compares dollar volume (`adv20`) with share volume, so it is identically −1
-  whenever prices exceed 1. Base-set formulas that fail are replaced by the nearest-complexity reserve
+  panel. For example, Alpha101 #7 compares dollar volume (`adv20`) with share volume, so it is identically
+  −1 whenever prices exceed 1. Base-set formulas that fail are replaced by the nearest-complexity reserve
   formula from the same library, and the swap is logged in `pools_report.json`.
-* **GTJA-191 formulas** that need `SMA`, GTJA's exponential `WMA`, `REGBETA` or benchmark series fall
-  outside the operator set and are not in the library. The MACD variant template uses an SMA
-  approximation because the DSL has no EMA.
-* **Formula transcriptions** of Alpha101 and GTJA-191 come from the original texts. Re-check them against
-  the source PDFs before the main run; any correction made after registration is a deviation.
+* **SA / SP / N validation (§7.2).**
+  * An SA variant is kept only when the verifier confirms the targeted change. Otherwise it is dropped and
+    counted as shortfall, with one variant per base and type.
+    * Sign: the decided PRED_SIGN verdicts flip, or every statically decided input direction flips.
+    * Window: the parameter is gone and the effective lookback changes.
+    * Field: the new dependence holds, and either the old one is gone or the behaviour changed.
+  * SP variants are validated on the exact presented text: math notation (`dsl/math_parser.py`),
+    anonymized text and program form are each parsed back.
+  * N is built last and checked against every other pool. Its novelty "passes" only when every search
+    completed with zero hits; otherwise the status is `pending_search`, and such formulas are kept only with
+    `--allow-pending-search` (pilot runs without search access).
+* **Library coverage (§5.5).**
+  * 355 formulas: 76 Alpha101, 121 GTJA-191 and 158 Alpha158.
+  * Every other Alpha101 / GTJA id is explicitly `not_expressible` with a reason (IndNeutralize, cap,
+    product; SMA, EMA-type WMA, REGBETA, benchmark series) or `pending` its source check (17 GTJA ids).
+  * The 128 later transcriptions were made without access to the source PDFs and carry a note saying so.
+    Re-check them against the sources before the main run, or log a deviation.
+* The MACD variant template uses an SMA approximation because the DSL has no EMA.
+* **Narration defaults.**
+  * The T = 0 reference sample is planned by default (`--no-reference-t0` opts out).
+  * Each P2 formula gets exactly one cross-narrator from another family (a global assignment).
+  * After an exhausted A2 tool budget, the model gets one final turn with tools disabled.
+  * §14 ablation cells (structured elicitation, 150-word cap, reasoning effort) use separate templates;
+    the primary templates are byte-identical to Appendix A.
 
 ## Data tiers
 
