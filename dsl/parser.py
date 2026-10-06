@@ -340,7 +340,15 @@ class _Parser:
         params = []
         for pname, kind, a in zip(s.params, s.param_kinds, args[n_kids:]):
             if kind in ("lag", "lag1", "window"):
-                params.append(self.window(a))
+                w = self.window(a)
+                # layer 1 of look-ahead impossibility (§6.3): negative lags / forward shifts do not exist
+                if kind == "lag" and w < 0:
+                    raise ParseError(f"{raw}: negative lag {w} (look-ahead) is not part of the DSL")
+                if kind == "lag1" and w < 1:
+                    raise ParseError(f"{raw}: lag must be >= 1, got {w}")
+                if kind == "window" and w < s.min_window:
+                    raise ParseError(f"{raw}: window must be >= {s.min_window}, got {w}")
+                params.append(w)
             else:
                 v = _const_value(a)
                 if v is None:

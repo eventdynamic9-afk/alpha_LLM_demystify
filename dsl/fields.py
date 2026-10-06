@@ -45,15 +45,30 @@ FIELDS: dict[str, FieldSpec] = {
 
 PRICE_FIELDS = tuple(n for n, f in FIELDS.items() if f.kind == "price")
 
+# Price-adjustment wording shown to models; a panel whose prices are not dividend-adjusted declares
+# meta["price_adjustment"] = "split" and the CLI context calls set_price_adjustment("split").
+_PRICE_ADJUSTMENT = {"value": "split/dividend"}
+
+
+def set_price_adjustment(kind: str | None) -> None:
+    _PRICE_ADJUSTMENT["value"] = {"split": "split", None: "split/dividend"}.get(kind, "split/dividend")
+
+
+def field_description(name: str, market: str = "CN") -> str:
+    if name == "vwap" and market == "US":
+        return "proxy (high+low+close)/3 because daily VWAP is unavailable for this market"
+    desc = FIELDS[name].description
+    if FIELDS[name].kind == "price":
+        desc = desc.replace("split/dividend adjusted", f"{_PRICE_ADJUSTMENT['value']} adjusted")
+    return desc
+
 
 def field_glossary(names, market: str = "CN", notation: str = "qlib", legend: dict | None = None) -> str:
     """One line per field, in the order given (callers randomize the order, §8.4)."""
     lines = []
     for n in names:
         spec = FIELDS[n]
-        desc = spec.description
-        if n == "vwap" and market == "US":
-            desc = "proxy (high+low+close)/3 because daily VWAP is unavailable for this market"
+        desc = field_description(n, market)
         if legend is not None:
             label = legend[n]
         elif notation == "qlib":

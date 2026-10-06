@@ -73,9 +73,11 @@ def test_membership_mask_and_cross_section_universe():
         np.testing.assert_allclose(cs[1, :2], [0.5, 1.0])
 
 
-def test_fixture_expected_outputs():
-    p = Panel.load(FIX / "synthetic_gbm.npz")
-    exp = json.loads((FIX / "expected_outputs.json").read_text())
+@pytest.mark.parametrize("panel_file,expected_file", [("synthetic_gbm.npz", "expected_outputs.json"),
+                                                      ("real_slice.npz", "expected_outputs_real.json")])
+def test_fixture_expected_outputs(panel_file, expected_file):
+    p = Panel.load(FIX / panel_file)
+    exp = json.loads((FIX / expected_file).read_text())
     for src, e in exp.items():
         for ex in (E1, E2):
             v = ex.evaluate(parse(src), p)
@@ -89,22 +91,78 @@ def panel():
     return synthetic_panel(40, 260, seed=11)
 
 
+def _minimal(name: str):
+    """A minimal valid formula for each operator, on inputs with NaNs, ties and constant windows."""
+    from dsl.ast import C, F, Node
+    from dsl.operators import OPS
+
+    s = OPS[name]
+    x, y = F("close"), F("volume")
+    params = []
+    for kind in s.param_kinds:
+        params.append({"lag": 2, "lag1": 2, "window": max(5, s.min_window), "level": 0.8}.get(kind, 2.0))
+    if name == "CSScale":
+        params = [1.0]
+    if s.n_children == 1:
+        kids = (Node("Gt", (x, F("open"))),) if name == "Not" else (x,)
+    elif s.n_children == 2:
+        kids = (Node("Gt", (x, F("open"))), Node("Lt", (y, F("amount")))) if name in ("And", "Or") else (x, y)
+    else:
+        kids = (Node("Gt", (x, F("open"))), x, y)
+    return Node(name, kids, tuple(params))
+
+
+@pytest.fixture(scope="module")
+def edge_panel():
+    """Panel with suspensions (NaN runs), exact ties across stocks and constant windows."""
+    p = synthetic_panel(30, 160, seed=5)
+    f = {k: v.copy() for k, v in p.fields.items()}
+    for k in f:
+        f[k][40:47, 3] = np.nan                       # suspension
+        f[k][:, 7] = f[k][:, 6]                       # exact ties across stocks
+        f[k][60:80, 9] = f[k][60, 9]                  # constant window
+    return p.with_fields(**f)
+
+
+@pytest.mark.parametrize("name", sorted(__import__("dsl.operators", fromlist=["OPS"]).OPS))
+def test_e1_e2_agree_per_operator(name, edge_panel):
+    t = _minimal(name)
+    ag = agreement(E1.evaluate(t, edge_panel), E2.evaluate(t, edge_panel), t)
+    assert ag.ok, (to_qlib(t), ag)
+
+
 def test_e1_e2_agree_on_random_formulas(panel):
+    from dsl.random_trees import AGREEMENT_WEIGHTS
+
     for i in range(60):
-        t = random_tree(random.Random(1000 + i), max_depth=random.Random(i).randint(2, 5))
-        ag = agreement(E1.evaluate(t, panel), E2.evaluate(t, panel))
+        t = random_tree(random.Random(1000 + i), max_depth=random.Random(i).randint(2, 5), weights=AGREEMENT_WEIGHTS)
+        ag = agreement(E1.evaluate(t, panel), E2.evaluate(t, panel), t)
         assert ag.ok, (to_qlib(t), ag)
+
+
+def test_rank_rule_only_where_float_order_matters(panel):
+    t = parse("Mean($close, 5)")
+    x = E2.evaluate(t, panel)
+    assert not agreement(x, 3 * x + 7, t).ok                       # no order-dependent operator: abs rule only
+    r = parse("CSRank(Mean($close, 5))")
+    y = E2.evaluate(r, panel)
+    assert agreement(y, y + 1e-6 * np.isfinite(y), r).ok          # order-dependent: rank rule allowed
 
 
 @pytest.mark.slow
 def test_e1_e2_agree_on_500_random_formulas(panel):
+    from dsl.random_trees import AGREEMENT_WEIGHTS
+
     fails = []
+    used = set()
     for i in range(500):
-        t = random_tree(random.Random(i), max_depth=random.Random(i + 7).randint(2, 5))
-        ag = agreement(E1.evaluate(t, panel), E2.evaluate(t, panel))
+        t = random_tree(random.Random(i), max_depth=random.Random(i + 7).randint(2, 5), weights=AGREEMENT_WEIGHTS)
+        used |= {m.op for m in __import__("dsl").walk(t) if not m.is_leaf}
+        ag = agreement(E1.evaluate(t, panel), E2.evaluate(t, panel), t)
         if not ag.ok:
             fails.append((to_qlib(t), ag))
     assert not fails, fails[:5]
+    assert set(AGREEMENT_WEIGHTS) <= used | {"SignedPower"}
 
 
 def test_alpha101_serialization_is_numerically_equivalent(panel):
@@ -112,7 +170,7 @@ def test_alpha101_serialization_is_numerically_equivalent(panel):
         t = random_tree(random.Random(5000 + i), max_depth=4)
         a = E2.evaluate(t, panel)
         b = E2.evaluate(parse(to_alpha101(t), "alpha101"), panel)
-        assert agreement(a, b).ok, to_qlib(t)
+        assert agreement(a, b, t).ok, to_qlib(t)
 
 
 def test_truncation_test(panel):

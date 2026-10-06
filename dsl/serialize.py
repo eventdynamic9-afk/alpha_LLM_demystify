@@ -221,7 +221,9 @@ def _m(n: Node, parent_prec: int) -> str:
     if op == "CSZScore":
         return f"\\operatorname{{z}}_{{\\mathrm{{cs}}}}({_m(n.children[0], 0)})"
     if op == "CSScale":
-        return f"\\operatorname{{scale}}_{{\\mathrm{{cs}}}}({_m(n.children[0], 0)})"
+        a = float(n.params[0]) if n.params else 1.0
+        sub = "\\mathrm{cs}" if a == 1.0 else f"\\mathrm{{cs}},{fmt_num(a)}"
+        return f"\\operatorname{{scale}}_{{{sub}}}({_m(n.children[0], 0)})"
     name = _MATH_NAME[op]
     sub = ",".join(_param_str(p) for p in n.params)
     args = ", ".join(_m(c, 0) for c in n.children)

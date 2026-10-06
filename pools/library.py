@@ -83,7 +83,8 @@ _A101 = {
     55: "(-1 * correlation(rank(((close - ts_min(low, 12)) / (ts_max(high, 12) - ts_min(low, 12)))), rank(volume), 6))",
     101: "((close - open) / ((high - low) + .001))",
 }
-_A101_BASE = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 13, 14, 15, 16, 18, 20, 33, 41, 101}
+# Base-set members are frozen from select_base_set() (seed 20261006); see that function.
+_A101_BASE = {3, 4, 5, 7, 11, 14, 15, 16, 17, 20, 22, 26, 28, 35, 40, 42, 53, 54, 55, 101}
 # Alpha101 entries outside the OHLCV(+VWAP) panel (IndNeutralize / cap / product) — not expressible.
 A101_NOT_EXPRESSIBLE = {48, 56, 58, 59, 63, 67, 69, 70, 76, 79, 80, 82, 87, 89, 90, 91, 93, 97, 100}
 
@@ -122,8 +123,9 @@ _GTJA = {
     189: "MEAN(ABS(CLOSE-MEAN(CLOSE,6)),6)",
     191: "((CORR(MEAN(VOLUME,20), LOW, 5) + ((HIGH + LOW) / 2)) - CLOSE)",
 }
-# GTJA 32 and 83 duplicate Alpha101 #15 and #16 and are kept out of the base set (§7.1 dedup rule).
-_GTJA_BASE = {1, 2, 5, 11, 12, 14, 15, 18, 20, 31, 42, 46, 53, 65, 76, 104, 141, 161, 167, 191}
+# GTJA 5, 13, 32, 42, 83 and 104 are canonical duplicates of Alpha101 #26, #41, #15, #40, #16 and #22
+# and are not base-set candidates (§7.1 dedup rule).
+_GTJA_BASE = {1, 11, 14, 15, 18, 20, 31, 34, 46, 53, 65, 71, 76, 88, 97, 161, 167, 168, 185, 189}
 
 # ------------------------------------------------------------------------------------- Alpha158
 _A158_KBAR = {
@@ -170,8 +172,8 @@ _A158_ROLLING = {
     "VSUMD": "(Sum(Greater($volume-Ref($volume, 1), 0), {d})-Sum(Greater(Ref($volume, 1)-$volume, 0), {d}))/(Sum(Abs($volume-Ref($volume, 1)), {d})+1e-12)",
 }
 A158_WINDOWS = (5, 10, 20, 30, 60)
-_A158_BASE = {"KMID", "KLEN", "KUP2", "KSFT2", "VWAP0", "ROC20", "MA10", "STD20", "BETA10", "RSQR20", "RESI10",
-              "MAX30", "QTLU20", "RANK10", "RSV20", "IMXD30", "CORR20", "SUMP20", "VMA5", "WVMA20"}
+_A158_BASE = {"BETA10", "CNTD20", "CNTP10", "CORD10", "CORR5", "IMXD5", "KLOW2", "KSFT2", "KUP2", "LOW0", "OPEN0",
+              "QTLU30", "RESI10", "STD5", "SUMD20", "SUMP60", "VSUMN10", "VSUMP10", "VWAP0", "WVMA5"}
 
 
 def alpha158_definitions() -> dict[str, str]:
@@ -204,6 +206,79 @@ def library() -> dict[str, LibraryFormula]:
 
 def base_set() -> list[LibraryFormula]:
     return [f for f in library().values() if f.base]
+
+
+def complexity_terciles(formulas) -> tuple[dict[str, int], list[float]]:
+    """Pooled node-count terciles (0/1/2) over the given formulas and the two cut points."""
+    import numpy as np
+
+    from dsl import descriptors
+
+    sizes = {f.lib_id: descriptors(f.node)["nodes"] for f in formulas}
+    q = np.quantile(list(sizes.values()), [1 / 3, 2 / 3])
+    return {k: int(s > q[0]) + int(s > q[1]) for k, s in sizes.items()}, [float(q[0]), float(q[1])]
+
+
+def base_candidates() -> list[LibraryFormula]:
+    """Every library formula with a distinct canonical form (the first occurrence wins)."""
+    from dsl import canonical_hash
+
+    seen, out = set(), []
+    for f in library().values():
+        h = canonical_hash(f.node)
+        if h not in seen:
+            seen.add(h)
+            out.append(f)
+    return out
+
+
+def select_base_set(seed: int = 20261006, per_library: int = 20) -> dict[str, list[str]]:
+    """§7.2 base set: per library, ``per_library`` formulas drawn at random within pooled complexity
+    terciles, as evenly as availability allows (7/7/6 for 20; a short tercile passes its quota to the
+    tercile with most remaining candidates). Alpha158 contributes at most one window per feature family.
+    The result is frozen in ``_A101_BASE`` / ``_GTJA_BASE`` / ``_A158_BASE``."""
+    import random
+    import re
+
+    cands = base_candidates()
+    terc, _ = complexity_terciles(cands)
+
+    def family(f):
+        return re.sub(r"\d+$", "", f.lib_id) if f.library == "alpha158" else f.lib_id
+
+    rng = random.Random(seed)
+    out = {}
+    for lib in ("alpha101", "gtja191", "alpha158"):
+        cells = []
+        for t in range(3):
+            fams: dict[str, list[str]] = {}
+            for f in sorted((f for f in cands if f.library == lib), key=lambda f: f.lib_id):
+                if terc[f.lib_id] == t:
+                    fams.setdefault(family(f), []).append(f.lib_id)
+            cells.append(fams)
+        avail = [len(c) for c in cells]
+        take = [min(per_library // 3 + (1 if i < per_library % 3 else 0), a) for i, a in enumerate(avail)]
+        while sum(take) < per_library:
+            i = max(range(3), key=lambda j: (avail[j] - take[j], -j))
+            if avail[i] - take[i] <= 0:
+                break
+            take[i] += 1
+        sel, used = [], set()
+        for t in range(3):
+            keys = sorted(cells[t])
+            rng.shuffle(keys)
+            n = 0
+            for k in keys:
+                if n >= take[t]:
+                    break
+                if k in used:
+                    continue
+                ids = cells[t][k]
+                sel.append(ids[rng.randrange(len(ids))])
+                used.add(k)
+                n += 1
+        out[lib] = sorted(sel)
+    return out
 
 
 def get(lib_id: str) -> LibraryFormula | None:

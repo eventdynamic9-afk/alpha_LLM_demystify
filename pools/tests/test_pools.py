@@ -84,13 +84,21 @@ def test_build_small_pools(tmp_path):
     from pools.build import build_all
 
     ctx = calibration_context(n_stocks=40, n_days=500, seed=4, fast=True)
-    rep = build_all(ctx, tmp_path, scale=0.1)
+    rep = build_all(ctx, tmp_path, scale=0.1, allow_pending_search=True)
     recs = read_jsonl(tmp_path / "formulas.jsonl")
     pools = {r["pool"] for r in recs}
     assert {"K", "SP", "SA", "N", "P3a", "P3b"} <= pools
     sa = [r for r in recs if r["pool"] == "SA"]
-    assert {r["perturbation"]["type"] for r in sa} == {"sa_sign", "sa_window", "sa_field"}
-    assert all(r["perturbation"]["validated_equivalent"] for r in recs if r["pool"] == "SP")
-    assert rep["counts"]["SA_sign"] == rep["counts"]["SA_window"] == rep["counts"]["SA_field"]
-    assert all(r["novelty"]["passed"] for r in recs if r["pool"] == "N")
+    assert {r["perturbation"]["type"] for r in sa} <= {"sa_sign", "sa_window", "sa_field"}
+    assert all(r["perturbation"]["confirmed"] for r in sa)                  # unconfirmed variants are dropped
+    assert len({(r["base_id"], r["perturbation"]["type"]) for r in sa}) == len(sa)   # one variant per base and type
+    n_base = rep["counts"]["K"]
+    for t in ("sign", "window", "field"):
+        assert rep["counts"].get(f"SA_{t}", 0) + rep["sa_shortfall"].get(t, 0) == n_base
+    assert all(r["perturbation"]["validated_on"] == "presented text" for r in recs if r["pool"] == "SP")
+    nov = [r["novelty"] for r in recs if r["pool"] == "N"]
+    assert nov and all(n["status"] == "pending_search" and not n["passed"] for n in nov)   # no search access
+    assert rep["novel"]["own_pool_formulas_checked"] > 0
     assert all("perturbed" not in r["presented"] for r in recs)
+    rep2 = build_all(ctx, tmp_path / "strict", scale=0.1)                    # without search N stays empty
+    assert rep2["counts"].get("N", 0) == 0

@@ -42,8 +42,9 @@ def main(argv=None) -> int:
     r.add_argument("--windows")
     r.add_argument("--fast", action="store_true")
     rl = sub.add_parser("relay", help="list or summarise pending relay requests")
-    rl.add_argument("action", choices=["pending", "stats"])
+    rl.add_argument("action", choices=["pending", "stats", "import-journal"])
     rl.add_argument("--dir", required=True)
+    rl.add_argument("--journal", help="workflow journal.jsonl: replies returned as text instead of written")
     rl.add_argument("--out", help="write the pending work list as JSON")
     q = sub.add_parser("probe")
     q.add_argument("--models", default="models.yaml")
@@ -99,6 +100,11 @@ def main(argv=None) -> int:
         from .relay import Relay
 
         rel = Relay(a.dir)
+        if a.action == "import-journal":
+            from .relay import import_journal
+
+            print(json.dumps(import_journal(rel, a.journal), indent=1))
+            return 0
         pend = rel.pending()
         if a.action == "stats" or not a.out:
             n_resp = len(list(rel.resp.glob("*.txt"))) if rel.resp.exists() else 0

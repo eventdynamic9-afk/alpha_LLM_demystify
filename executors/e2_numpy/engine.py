@@ -9,8 +9,9 @@ from scipy.stats import rankdata
 
 from dsl.ast import Node
 from dsl.operators import OPS
+from dsl.validate import validate
 
-from ..semantics import TIE_SENSITIVE, exact_sum, exact_zscore, snap
+from ..semantics import TIE_SENSITIVE, snap
 
 _CHUNK_ELEMS = 4_000_000
 
@@ -23,6 +24,9 @@ class E2Executor:
 
     # ----------------------------------------------------------------- public
     def evaluate(self, node: Node, panel, mask_members: bool = True) -> np.ndarray:
+        rep = validate(node)                     # no unvalidated tree is ever executed (§6.3 layer 2)
+        if not rep.ok:
+            raise ValueError(f"invalid formula: {rep.errors}")
         cache: dict = {} if self._cache_enabled else None
         with np.errstate(all="ignore"):
             out = self._eval(node, panel, cache)
@@ -252,16 +256,38 @@ def _cross_section(op: str, x: np.ndarray, member: np.ndarray, params) -> np.nda
         if op == "CSRank":
             out[t, idx] = _avg_rank(v) / len(v)
         elif op == "CSZScore":
-            z = exact_zscore(v)
-            if z is not None:
-                out[t, idx] = z
+            n = len(v)
+            if n < 2:
+                continue
+            mu = _exact_sum(v) / n
+            d = v - mu
+            var = _exact_sum(d * d) / (n - 1)
+            if var > 0:
+                out[t, idx] = d / np.sqrt(var)
         else:
             a = float(params[0])
-            s = exact_sum(np.abs(v))
+            s = _exact_sum(np.abs(v))
             if s == 0:
                 continue
             out[t, idx] = a * v / s
     return out
+
+
+def _exact_sum(v: np.ndarray) -> float:
+    """Correctly rounded sum, written independently of E1: every float is an integer mantissa times a power
+    of two, so the sum is an exact Python integer at the smallest exponent, rounded once to float."""
+    from fractions import Fraction
+
+    v = np.asarray(v, dtype=np.float64)
+    v = v[v != 0]
+    if v.size == 0:
+        return 0.0
+    m, e = np.frexp(v)                                  # v = m * 2**e, 0.5 <= |m| < 1
+    mi = (m * (1 << 53)).astype(np.int64)               # exact 53-bit integer mantissas
+    ex = e.astype(np.int64) - 53
+    lo = int(ex.min())
+    total = sum(int(a) << int(b - lo) for a, b in zip(mi.tolist(), ex.tolist()))
+    return float(Fraction(total) * (Fraction(2) ** lo))
 
 
 def _avg_rank(v: np.ndarray) -> np.ndarray:

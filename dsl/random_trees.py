@@ -21,6 +21,9 @@ DEFAULT_WEIGHTS = {
     "Resi": 0.5, "Corr": 3, "Cov": 1, "CSRank": 4, "CSZScore": 1, "CSScale": 0.5,
 }
 
+# Agreement tests (§6.4 "every operator"): every operator in the typed table gets a non-zero weight.
+AGREEMENT_WEIGHTS = {**DEFAULT_WEIGHTS, "Ge": 0.3, "Le": 0.3, "Eq": 0.3, "Ne": 0.3, "And": 0.3, "Or": 0.3, "Not": 0.3}
+
 
 def _params(name: str, rng: random.Random, windows, lags) -> tuple:
     s = OPS[name]

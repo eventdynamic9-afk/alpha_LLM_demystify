@@ -219,6 +219,7 @@ def operator_glossary(names, notation: str = "qlib") -> str:
         if s.infix:
             out.append(f"{s.infix}: {s.description}")
         else:
-            args = ", ".join(["x"] * s.n_children + list(s.params))
+            names_ = {1: ["x"], 2: ["x", "y"], 3: ["cond", "x", "y"]}[s.n_children] if s.n_children else []
+            args = ", ".join(names_ + list(s.params))
             out.append(f"{label}({args}): {s.description}")
     return "; ".join(out)

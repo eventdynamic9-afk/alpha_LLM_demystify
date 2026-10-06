@@ -12,26 +12,38 @@ from .verdicts import REFUTED, SUPPORTED, UNRESOLVED, UNVERIFIABLE, Verdict
 
 
 def numerically_equivalent(a: np.ndarray, b: np.ndarray, rho: float = 0.999, share: float = 0.99,
-                           min_n: int = 10) -> dict:
-    """Exact-equal, or daily cross-sectional rank correlation >= rho on >= share of dates."""
+                           min_n: int = 10, coverage_tol: float = 0.01) -> dict:
+    """§6.5: exact-equal, or daily cross-sectional rank correlation >= rho on >= share of dates.
+
+    The denominator is every date on which either signal is evaluable (>= min_n finite values); a date
+    passes only if both are evaluable there and rho_t >= rho, so a date where one signal is undefined or
+    constant counts as a failure. The two signals must also cover the same cells: cells finite in exactly
+    one signal may be at most ``coverage_tol`` of the cells finite in either.
+    """
     fa, fb = np.isfinite(a), np.isfinite(b)
     if np.array_equal(fa, fb) and np.array_equal(a[fa], b[fb]):
         return {"equivalent": True, "rule": "exact"}
-    # Exact early rejection: rho_t can only be finite on rows with >= min_n joint observations, so if
-    # more sampled rows fail than (1 - share) x that count allows, the full computation must fail too.
-    possible = int(((fa & fb).sum(axis=1) >= min_n).sum())
-    if possible > 200:
+    either = fa | fb
+    mismatch = float((fa ^ fb).sum() / max(1, either.sum()))
+    ca, cb = fa.sum(axis=1) >= min_n, fb.sum(axis=1) >= min_n
+    evaluable = int((ca | cb).sum())
+    if evaluable == 0:
+        return {"equivalent": False, "rule": "no_overlap"}
+    if mismatch > coverage_tol:
+        return {"equivalent": False, "rule": "coverage", "coverage_mismatch": mismatch}
+    # exact early rejection on a sample of dates: sampled failures are a lower bound on all failures
+    if evaluable > 200:
         idx = np.linspace(0, a.shape[0] - 1, 60).astype(int)
         rs = daily_spearman(a[idx], b[idx], min_n=min_n)
         fails = int((np.isfinite(rs) & (rs < rho)).sum())
-        if fails > (1.0 - share) * possible:
+        if fails > (1.0 - share) * evaluable:
             return {"equivalent": False, "rule": "rank_corr_screen", "sampled_failures": fails}
     r = daily_spearman(a, b, min_n=min_n)
+    passed = int((np.isfinite(r) & (r >= rho) & ca & cb).sum())
+    sh = passed / evaluable
     ok = np.isfinite(r)
-    if ok.sum() == 0:
-        return {"equivalent": False, "rule": "no_overlap"}
-    sh = float((r[ok] >= rho).mean())
-    return {"equivalent": sh >= share, "rule": "rank_corr", "share_dates": sh, "median_rho": float(np.median(r[ok]))}
+    return {"equivalent": sh >= share, "rule": "rank_corr", "share_dates": sh, "coverage_mismatch": mismatch,
+            "median_rho": float(np.median(r[ok])) if ok.any() else float("nan")}
 
 
 def _equiv_cfg(ctx) -> tuple[float, float]:

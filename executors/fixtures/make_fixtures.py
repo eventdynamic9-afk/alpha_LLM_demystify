@@ -3,9 +3,11 @@
 * ``synthetic_gbm.npz``  — deterministic synthetic GBM panel (30 stocks x 160 days) with defects.
 * ``expected_outputs.json`` — E2 outputs of a fixed formula list on that panel (rounded checksum +
   a sample of cells), so any future change of either executor's semantics is caught.
-* ``real_slice.npz`` (optional) — a 50-stock slice of the CN panel, built only after the data
-  layer has been rebuilt locally: ``python -m executors.fixtures.make_fixtures --real <panel.npz>``.
-  It is not committed when the underlying data license forbids redistribution (§5.10).
+* ``real_slice.npz`` + ``expected_outputs_real.json`` — a real 50-stock x 250-day slice. The committed
+  slice comes from the US fallback panel (CC0 source, redistributable; ``python -m data rebuild
+  us-plotly``) and deliberately includes names with cleaning events (suspension-like gaps, a reversed
+  spike, a bad open print, a 2-for-1 distribution): ``python -m executors.fixtures.make_fixtures --real
+  data/processed/us_sp500_plotly.npz``. A CN slice is committed only where the data license allows it.
 """
 from __future__ import annotations
 
@@ -44,6 +46,20 @@ def build_synthetic() -> Panel:
     return synthetic_panel(n_stocks=30, n_days=160, seed=7)
 
 
+REAL_MUST_INCLUDE = ("DISCA", "LNT", "CHD", "MRO", "NWL", "BBY", "AMD")   # cleaning events in 2014-2017
+
+
+def build_real_slice(full: Panel, n_stocks: int = 50, n_days: int = 250, start: str = "2014-05-01") -> Panel:
+    rows = np.flatnonzero(full.dates >= np.datetime64(start))[:n_days]
+    p = full.take_dates(rows)
+    have = [s for s in REAL_MUST_INCLUDE if s in set(p.instruments.tolist())]
+    rng = np.random.default_rng(20261006)
+    rest = [s for s in p.instruments.tolist() if s not in have and np.isfinite(p.get("close")[:, list(p.instruments).index(s)]).all()]
+    pick = have + sorted(rng.choice(rest, size=n_stocks - len(have), replace=False).tolist())
+    idx = np.sort([list(p.instruments).index(s) for s in pick])
+    return p.take_instruments(idx)
+
+
 def expected_outputs(panel: Panel) -> dict:
     from executors import E2Executor
 
@@ -70,10 +86,9 @@ def main() -> None:
     p.save(HERE / "synthetic_gbm.npz")
     (HERE / "expected_outputs.json").write_text(json.dumps(expected_outputs(p), indent=1))
     if args.real:
-        full = Panel.load(args.real)
-        cover = np.isfinite(full.get("close")).mean(axis=0)
-        idx = np.argsort(-cover)[:50]
-        full.take_instruments(np.sort(idx)).save(HERE / "real_slice.npz")
+        real = build_real_slice(Panel.load(args.real))
+        real.save(HERE / "real_slice.npz")
+        (HERE / "expected_outputs_real.json").write_text(json.dumps(expected_outputs(real), indent=1))
     print("fixtures written to", HERE)
 
 

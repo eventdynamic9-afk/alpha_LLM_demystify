@@ -128,8 +128,11 @@ def sign_map(node: Node) -> SignMap:
         return merge(scale(ms[0], s_num), scale(ms[1], s_den))
     if op == "Abs":
         return scale(ms[0], _value_sign(kids[0]))
-    if op in ("Sign", "Log", "CSRank", "CSZScore", "CSScale"):
+    if op in ("Sign", "Log", "CSRank", "CSZScore"):
         return ms[0]
+    if op == "CSScale":                          # a * x / sum|x|: non-decreasing in x for a > 0
+        a = float(node.params[0]) if node.params else 1.0
+        return ms[0] if a > 0 else scale(ms[0], NEG) if a < 0 else {}
     if op == "Power":
         p = float(node.params[0])
         iv = interval(kids[0])

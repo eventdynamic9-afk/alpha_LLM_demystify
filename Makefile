@@ -32,14 +32,15 @@ roster:
 smoke:
 	mkdir -p $(RUN)
 	$(PY) -m data synthetic --out $(PANEL) --stocks 60 --days 700
-	$(MAKE) pools narrate parse verify drivers exposures judges analysis tables RUN=$(RUN) PANEL=$(PANEL) MODELS=$(MODELS) SCALE=0.1 K=1 FAST=--fast AUTHORS=$(MODELS)
+	$(MAKE) pools narrate parse verify drivers exposures judges analysis tables RUN=$(RUN) PANEL=$(PANEL) MODELS=$(MODELS) SCALE=0.1 K=1 FAST=--fast AUTHORS=$(MODELS) PENDING_SEARCH=1
 
 SCALE ?= 1.0
 K ?= 3
 FAST ?=
 AUTHORS ?=
+PENDING_SEARCH ?=
 pools:
-	$(PY) -m pools build --panel $(PANEL) --out $(RUN) --scale $(SCALE) $(FAST) $(if $(AUTHORS),--authors $(AUTHORS))
+	$(PY) -m pools build --panel $(PANEL) --out $(RUN) --scale $(SCALE) $(FAST) $(if $(AUTHORS),--authors $(AUTHORS)) $(if $(PENDING_SEARCH),--allow-pending-search)
 narrate:
 	$(PY) -m narrate run --formulas $(RUN)/formulas.jsonl --panel $(PANEL) --run-dir $(RUN) --models $(MODELS) --k $(K) $(FAST)
 parse:

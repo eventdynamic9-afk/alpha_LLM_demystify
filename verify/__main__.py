@@ -2,7 +2,7 @@
 
     python -m verify run --formulas runs/x/formulas.jsonl --claims runs/x/claims.jsonl \
         --panel data/processed/cn_csi500.npz --out runs/x/verdicts.jsonl [--fast]
-    python -m verify calibrate --out runs/calibration [--fast]
+    python -m verify calibrate --out runs/calibration [--fast] [--panel data/processed/us_sp500_plotly.npz]
     python -m verify drivers --formulas runs/x/formulas.jsonl --panel ... --out runs/x/drivers.jsonl
     python -m verify exposures --formulas runs/x/formulas.jsonl --panel ... --out runs/x/exposures.jsonl
 """
@@ -13,7 +13,6 @@ import json
 import sys
 from pathlib import Path
 
-from configs import study
 from data.panel import Panel
 from dsl import parse
 
@@ -21,13 +20,16 @@ from dsl import parse
 def _ctx(panel_path: str, fast: bool, windows: str | None = None):
     from .context import VerificationContext
 
+    from dsl.fields import set_price_adjustment
+
     p = Panel.load(panel_path)
+    set_price_adjustment(p.meta.get("price_adjustment"))
     w = json.loads(windows) if windows else None
     if w is None and p.meta.get("windows"):          # windows declared by the panel builder (deviation log)
         w = {k: tuple(v) for k, v in p.meta["windows"].items()}
     if w is None and p.meta.get("source") == "synthetic":
-        cut = str(p.dates[int(p.T * 0.6)])
-        w = {"train": (str(p.dates[0]), cut), "test": (cut, str(p.dates[-1]))}
+        cut_v, cut = str(p.dates[int(p.T * 0.5)]), str(p.dates[int(p.T * 0.6)])
+        w = {"train": (str(p.dates[0]), cut_v), "valid": (cut_v, cut), "test": (cut, str(p.dates[-1]))}
     return VerificationContext(p, windows=w or {}, fast=fast)
 
 
@@ -152,6 +154,8 @@ def main(argv=None) -> int:
     c = sub.add_parser("calibrate")
     c.add_argument("--out", required=True)
     c.add_argument("--fast", action="store_true")
+    c.add_argument("--panel", help="run the planted set on a real panel (truth is by construction either way)")
+    c.add_argument("--windows")
     d = sub.add_parser("drivers")
     d.add_argument("--formulas", required=True)
     d.add_argument("--panel", required=True)
@@ -173,7 +177,8 @@ def main(argv=None) -> int:
         return exposures(a)
     from .calibration import calibration_context, run_calibration
 
-    s = run_calibration(calibration_context(fast=a.fast), a.out)
+    ctx = _ctx(a.panel, a.fast, a.windows) if a.panel else calibration_context(fast=a.fast)
+    s = run_calibration(ctx, a.out)
     fails = s.pop("failures")
     print(json.dumps(s, indent=1))
     print(f"{len(fails)} failures")

@@ -10,7 +10,7 @@ import random
 
 from configs import fill, prompt, template_sha256
 from dsl import parse, walk
-from dsl.fields import FIELDS
+from dsl.fields import field_description
 from dsl.operators import OPS, operator_glossary
 from dsl.serialize import anonymize_legend
 
@@ -31,9 +31,7 @@ def field_glossary_for(record: dict, market: str, rng: random.Random) -> str:
     legend = record.get("legend")
     lines = []
     for n in names:
-        desc = FIELDS[n].description
-        if n == "vwap" and market == "US":
-            desc = "proxy (high+low+close)/3 because daily VWAP is unavailable for this market"
+        desc = field_description(n, market)
         if legend:
             label = legend.get(n)
             if label is None:

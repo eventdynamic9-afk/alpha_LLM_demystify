@@ -18,7 +18,7 @@ import numpy as np
 
 def agree(a) -> int:
     from data.panel import Panel
-    from dsl import parse, to_qlib
+    from dsl import to_qlib
     from dsl.operators import warmup
     from dsl.random_trees import random_tree
 
@@ -43,7 +43,7 @@ def agree(a) -> int:
     with open(out, "w", encoding="utf-8") as fh:
         for fid, node in items:
             x1, x2 = e1.evaluate(node, p), e2.evaluate(node, p)
-            ag = agreement(x1, x2)
+            ag = agreement(x1, x2, node)
             tr = truncation_test(node, p, e2, a.n_cut) if a.truncation else None
             rec = {"formula_id": fid, "qlib": to_qlib(node), "warmup": warmup(node), **ag.to_dict(),
                    "finite_share": float(np.isfinite(x2).mean())}

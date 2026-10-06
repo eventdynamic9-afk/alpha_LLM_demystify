@@ -125,3 +125,34 @@ class Relay:
         p = self.resp / f"{key}.txt"
         p.write_text(text, encoding="utf-8")
         return p
+
+
+def import_journal(relay: Relay, journal: str | Path) -> dict:
+    """Recover replies that answering agents returned as text instead of writing the response file.
+
+    Agent labels are ``<tier>:<last 6 characters of the key>``; a reply is imported only when exactly one
+    pending request matches the label, and replies that are just an acknowledgement are ignored.
+    """
+    labels, results = {}, []
+    with open(journal, encoding="utf-8") as fh:
+        for line in fh:
+            d = json.loads(line)
+            if d.get("type") == "started":
+                labels[d["agentId"]] = d.get("label", "")
+            elif d.get("type") == "result":
+                results.append(d)
+    pend = relay.pending()
+    imported, skipped = [], []
+    for d in results:
+        text = d.get("result")
+        text = text if isinstance(text, str) else json.dumps(text)
+        if text.strip().strip(".").lower() in ("done", "") or len(text.split()) < 5:
+            continue
+        tier, _, suffix = labels.get(d.get("agentId"), "").partition(":")
+        match = [p for p in pend if p["key"].endswith(suffix) and p["key"].split("-")[1] == tier]
+        if len(match) == 1:
+            relay.put(match[0]["key"], text.strip())
+            imported.append(match[0]["key"])
+        else:
+            skipped.append({"label": labels.get(d.get("agentId")), "matches": len(match)})
+    return {"imported": imported, "skipped": skipped}

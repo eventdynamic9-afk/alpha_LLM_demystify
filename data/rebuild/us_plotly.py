@@ -204,7 +204,7 @@ def rebuild_us_plotly(raw_path: str | Path = PLOTLY_PATH, membership_csv: str | 
     meta = dict(panel.meta)
     meta.update({"source": "plotly/datasets all_stocks_5yr (Kaggle S&P 500, CC0)",
                  "adjusted": "vendor split adjustment + manual corporate actions >= 30% gap; dividends not adjusted",
-                 "survivorship": "biased: February-2018 constituents only",
+                 "survivorship": "biased: February-2018 constituents only", "price_adjustment": "split",
                  "windows": {k: list(v) for k, v in WINDOWS.items()},
                  "deviation": "Appendix E.7: §5.4 sources unreachable; window 2013-2018; no post-cutoff window"})
     panel = Panel(panel.dates, panel.instruments, panel.fields, member, "US", meta)

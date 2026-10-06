@@ -21,6 +21,8 @@ def main(argv=None) -> int:
     b.add_argument("--out", required=True)
     b.add_argument("--scale", type=float, default=1.0)
     b.add_argument("--search", action="store_true", help="run GitHub / infini-gram novelty searches")
+    b.add_argument("--allow-pending-search", action="store_true",
+                   help="keep N formulas whose novelty searches could not run (status pending_search; pilot only)")
     b.add_argument("--authors", help="models YAML; models with role 'author' run P1/P2")
     b.add_argument("--protocols", default="P1_raw,P1_mined,P2", help="Arm-A authorship protocols to run")
     b.add_argument("--n-arm-a", type=int, help="formulas per Arm-A protocol and model (default 60 x scale)")
@@ -49,7 +51,7 @@ def main(argv=None) -> int:
 
             authors = [get_client(m) for m in models(a.authors)["models"] if "author" in m.get("roles", [])]
         rep = build_all(ctx, a.out, a.scale, a.search, authors, protocols=tuple(a.protocols.split(",")),
-                        n_arm_a=a.n_arm_a)
+                        n_arm_a=a.n_arm_a, allow_pending_search=a.allow_pending_search)
         print(json.dumps(rep["counts"], indent=1))
     elif a.cmd == "import-p4":
         from .in_the_wild import import_alpha_r1_profiles, import_framework_outputs

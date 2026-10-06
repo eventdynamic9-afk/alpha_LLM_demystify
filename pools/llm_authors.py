@@ -48,7 +48,9 @@ def _glossaries(market: str) -> tuple[str, str]:
 
 
 def _valid_ic(node, ctx) -> tuple[float, float]:
-    rows = ctx.rows("valid") if "valid" in ctx.windows else ctx.rows("train")
+    if "valid" not in ctx.windows:                 # §7.1: refinement is guided by the validation window only
+        raise ValueError("P1-mined needs a 'valid' window; the training window decides behavioral truth")
+    rows = ctx.rows("valid")
     ic = daily_spearman(ctx.signal(node), ctx.fwd(1, "open_t+1"), rows)
     m, se, t = newey_west_mean(ic)
     return float(np.nan_to_num(m)), float(np.nan_to_num(t))

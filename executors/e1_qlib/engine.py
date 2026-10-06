@@ -22,6 +22,7 @@ import pandas as pd
 from scipy.stats import percentileofscore
 
 from dsl.ast import Node
+from dsl.validate import validate
 
 from ..semantics import TIE_SENSITIVE, exact_sum, exact_zscore, snap
 
@@ -33,6 +34,9 @@ class E1Executor:
         self.qlib_native = qlib_native
 
     def evaluate(self, node: Node, panel, mask_members: bool = True) -> np.ndarray:
+        rep = validate(node)                     # no unvalidated tree is ever executed (§6.3 layer 2)
+        if not rep.ok:
+            raise ValueError(f"invalid formula: {rep.errors}")
         self._panel = panel
         self._member = pd.DataFrame(panel.member, index=pd.RangeIndex(panel.T), columns=range(panel.N))
         self._cache: dict = {}

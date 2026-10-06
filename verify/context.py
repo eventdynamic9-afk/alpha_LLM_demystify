@@ -27,7 +27,7 @@ class VerificationContext:
     def __post_init__(self) -> None:
         if not self.windows:
             sp = study()["splits"]["comparability"]
-            self.windows = {"train": tuple(sp["train"]), "test": tuple(sp["test"])}
+            self.windows = {k: tuple(sp[k]) for k in ("train", "valid", "test") if k in sp}
         self._signals: dict[str, np.ndarray] = {}
         self._fwd: dict[tuple, np.ndarray] = {}
         self._refs = None

@@ -4,7 +4,8 @@
 2. Max |time-average cross-sectional Spearman rho| with every reference-library signal < 0.7.
 3. Normalized-string search (whitespace / variable-name insensitive) returns no hits in GitHub code
    search and in an n-gram index of open pretraining corpora (infini-gram); results are logged, and a
-   search that could not run is recorded as "not_run" (never silently treated as "no hit").
+   search that could not run is recorded as "not_run" (never silently treated as "no hit"); a formula
+   passes only when every search completed with zero hits, otherwise its status is "pending_search".
 4. Generation timestamp and seed are logged; formulas stay private until the study ends and are
    narrated only by local models or endpoints whose terms exclude training on inputs.
 5. On release every file embeds a canary GUID (BIG-bench practice), see :mod:`pools.canary`.
@@ -89,12 +90,20 @@ def novelty_checks(node: Node, ctx, own_hashes: set[str], search: bool = True, s
     key = normalized_string(node)
     searches = {}
     if search:
-        searches["github_code"] = github_code_search(to_qlib(node))
-        searches["infinigram"] = infinigram_count(to_qlib(node))
+        # several renderings: literal Qlib, Qlib without whitespace, the field-name-insensitive key and
+        # the Alpha101 form (code search cannot match whitespace- or name-insensitively by itself)
+        from dsl import to_alpha101
+
+        q = to_qlib(node)
+        for name, query in (("qlib", q), ("qlib_nospace", re.sub(r"\s+", "", q)), ("normalized", key),
+                            ("alpha101", to_alpha101(node))):
+            searches[f"github_code:{name}"] = github_code_search(query)
+            searches[f"infinigram:{name}"] = infinigram_count(query)
     hits = [s.get("hits", 0) for s in searches.values() if s.get("status") == "ok"]
-    c3 = not any(hits)
+    completed = bool(searches) and all(s.get("status") == "ok" for s in searches.values())
+    c3 = completed and not any(hits)
+    status = ("failed" if not (c1 and c2) or any(hits) else "passed" if c3 else "pending_search")
     return {"canonical_unique": c1, "max_abs_rho": best, "max_abs_rho_ref": best_ref, "rho_ok": c2,
-            "normalized_key": key, "searches": searches, "search_clean": c3,
-            "searches_completed": all(s.get("status") == "ok" for s in searches.values()) if searches else False,
-            "passed": bool(c1 and c2 and c3), "seed": seed, "created_at": created_at,
+            "normalized_key": key, "searches": searches, "search_clean": c3, "searches_completed": completed,
+            "status": status, "passed": status == "passed", "seed": seed, "created_at": created_at,
             "wording": "absent from searchable public sources at generation time"}
