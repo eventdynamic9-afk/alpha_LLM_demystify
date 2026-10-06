@@ -178,3 +178,16 @@ def test_calibration_subset_passes():
 def test_full_calibration_set():
     s = run_calibration(calibration_context())
     assert s["passed"] and s["n_items"] == 300
+
+
+def test_sequential_evalues():
+    from verify.evalues import betting_evalue, sequential_resemblance
+
+    rng = np.random.default_rng(5)
+    strong = np.clip(0.6 + 0.1 * rng.standard_normal(400), -1, 1)
+    null = np.clip(0.0 + 0.1 * rng.standard_normal(400), -1, 1)
+    assert sequential_resemblance(strong)["verdict"] == "SUPPORTED"
+    assert sequential_resemblance(null)["verdict"] == "REFUTED"
+    # type-I error control under H0: mean = mu0 exactly
+    rej = sum(betting_evalue(np.clip(0.3 + 0.2 * rng.standard_normal(300), -1, 1), 0.3)["reject"] for _ in range(200))
+    assert rej / 200 <= 0.08

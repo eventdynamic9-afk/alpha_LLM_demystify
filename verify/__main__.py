@@ -4,6 +4,7 @@
         --panel data/processed/cn_csi500.npz --out runs/x/verdicts.jsonl [--fast]
     python -m verify calibrate --out runs/calibration [--fast]
     python -m verify drivers --formulas runs/x/formulas.jsonl --panel ... --out runs/x/drivers.jsonl
+    python -m verify exposures --formulas runs/x/formulas.jsonl --panel ... --out runs/x/exposures.jsonl
 """
 from __future__ import annotations
 
@@ -102,6 +103,39 @@ def drivers(args) -> int:
     return 0
 
 
+def exposures(args) -> int:
+    """Per formula: reference characteristics with rho_bar CI lower >= 0.30 (exposure coverage, §11) and
+    the OOS mean RankIC (fidelity-performance link, exploratory)."""
+    import numpy as np
+
+    from .stats import bootstrap_mean_ci, daily_spearman, newey_west_mean
+
+    ctx = _ctx(args.panel, args.fast, args.windows)
+    floor = ctx.thr["behavioral"]["resemblance_floor"]
+    out = Path(args.out)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    rows_tr = ctx.rows("train")
+    with open(out, "w", encoding="utf-8") as fh:
+        for rec in _read_jsonl(args.formulas):
+            f = ctx.signal(parse(rec["dsl"]))
+            ex = []
+            for name in ctx.references.characteristic_names():
+                r = daily_spearman(f, ctx.references.signal(name), rows_tr)
+                if np.isfinite(r).sum() < 30:
+                    continue
+                m, lo, hi, _ = bootstrap_mean_ci(np.sign(np.nanmean(r)) * r, 0.95, ctx.n_boot(), ctx.seed)
+                if lo >= floor:
+                    ex.append((name, float(m)))
+            ex.sort(key=lambda x: -x[1])
+            oos = None
+            if ctx.has_window("test"):
+                ic = daily_spearman(f, ctx.fwd(1, "open_t+1"), ctx.rows("test"))
+                oos = newey_west_mean(ic)[0]
+            fh.write(json.dumps({"formula_id": rec["formula_id"], "exposures": [e[0] for e in ex],
+                                 "exposure_rho": dict(ex), "oos_rank_ic": oos}, default=float) + "\n")
+    return 0
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(prog="python -m verify")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -122,11 +156,19 @@ def main(argv=None) -> int:
     d.add_argument("--out", required=True)
     d.add_argument("--windows")
     d.add_argument("--fast", action="store_true")
+    e = sub.add_parser("exposures")
+    e.add_argument("--formulas", required=True)
+    e.add_argument("--panel", required=True)
+    e.add_argument("--out", required=True)
+    e.add_argument("--windows")
+    e.add_argument("--fast", action="store_true")
     a = ap.parse_args(argv)
     if a.cmd == "run":
         return run(a)
     if a.cmd == "drivers":
         return drivers(a)
+    if a.cmd == "exposures":
+        return exposures(a)
     from .calibration import calibration_context, run_calibration
 
     s = run_calibration(calibration_context(fast=a.fast), a.out)

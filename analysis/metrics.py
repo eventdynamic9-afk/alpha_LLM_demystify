@@ -7,6 +7,8 @@ from itertools import combinations
 import numpy as np
 import pandas as pd
 
+from verify.stats import clopper_pearson
+
 from .bootstrap import cluster_bootstrap, macro_precision, micro_precision
 
 # claim predicates that address the property each SA perturbation targets (§11 counterfactual metrics)
@@ -16,6 +18,14 @@ TOOL_FOR = {"RESEMBLES": "corr_with", "INDEPENDENT": "corr_with", "EXPOSED": "co
             "MONO": "perturb", "PRED_SIGN": "compute_signal", "PERF": "compute_signal", "RANGE": "describe",
             "TURNOVER": "compute_signal"}
 FIELD_NAMES = ("open", "high", "low", "close", "vwap", "volume", "amount")
+
+
+def jeffreys_interval(k: int, n: int, level: float = 0.95) -> tuple[float, float]:
+    """Bayesian beta-binomial interval with the Jeffreys Beta(1/2, 1/2) prior."""
+    from scipy.stats import beta
+
+    a = (1 - level) / 2
+    return float(beta.ppf(a, k + 0.5, n - k + 0.5)), float(beta.ppf(1 - a, k + 0.5, n - k + 0.5))
 
 
 def _ci(df, stat, n_boot, seed, cluster="formula_id"):
@@ -34,8 +44,12 @@ def precision_summary(C: pd.DataFrame, by: list[str] | None = None, n_boot: int 
         mic = _ci(g, micro_precision, n_boot, seed)
         mac = _ci(g, macro_precision, n_boot, seed)
         vc = g["verdict"].value_counts()
+        k_sup, n_dec = int(g.loc[g["decidable"], "supported"].sum()), int(g["decidable"].sum())
         rows.append({**dict(zip(by or [], key)), "n_claims": len(g), "n_rationales": n_r,
-                     "n_decidable": int(g["decidable"].sum()), "cp_micro": mic["estimate"], "cp_micro_ci": mic["ci"],
+                     "n_decidable": n_dec, "cp_micro": mic["estimate"], "cp_micro_ci": mic["ci"],
+                     # small cells (§12.3): exact and Bayesian beta-binomial (Jeffreys) intervals alongside
+                     "cp_exact_ci": list(clopper_pearson(k_sup, n_dec)) if n_dec else [np.nan, np.nan],
+                     "cp_jeffreys_ci": list(jeffreys_interval(k_sup, n_dec)) if n_dec else [np.nan, np.nan],
                      "cp_macro": mac["estimate"], "cp_macro_ci": mac["ci"],
                      **{f"share_{v.lower()}": float(vc.get(v, 0) / len(g)) for v in
                         ("SUPPORTED", "REFUTED", "UNRESOLVED", "UNVERIFIABLE", "AMBIGUOUS")},

@@ -58,8 +58,33 @@ def run(a) -> int:
     if drivers:
         dc = M.driver_coverage(R, C, drivers)
         results["driver_coverage"] = dc.groupby(["condition", "model"])[["driver_coverage", "dominant_driver_omitted"]].mean().reset_index()
+    expo = {e["formula_id"]: e for e in read_jsonl(rd / "exposures.jsonl")}
+    if expo:
+        from configs import codebook
+
+        term_refs = {t: v["refs"] + v.get("variants_cn", []) for t, v in codebook()["terms"].items()}
+        ec = M.exposure_coverage(R, C, {k: v["exposures"] for k, v in expo.items()}, term_refs)
+        if len(ec):
+            results["exposure_coverage"] = ec.groupby(["condition", "model"])[
+                ["exposure_coverage", "dominant_exposure_omitted"]].mean().reset_index()
+        results["fidelity_performance"] = M.fidelity_performance(
+            prim, {k: v["oos_rank_ic"] for k, v in expo.items() if v.get("oos_rank_ic") is not None})
     verdicts = read_jsonl(rd / "verdicts.jsonl")
     claims = read_jsonl(rd / "claims.jsonl")
+    if a.gold and Path(a.gold).exists():
+        from .ppi import ppi_by_condition, rationale_precision
+
+        vmap = {v["claim_id"]: v["verdict"] for v in verdicts}
+        gold_v = {v["claim_id"]: v["verdict"] for v in read_jsonl(a.gold_verdicts)} if a.gold_verdicts else vmap
+        by_auto, by_gold = {}, {}
+        for c in claims:
+            by_auto.setdefault(c["rationale_id"], []).append(c)
+        for c in read_jsonl(a.gold):
+            by_gold.setdefault(c["rationale_id"], []).append(c)
+        rat_auto = {r: rationale_precision(cs, vmap) for r, cs in by_auto.items()}
+        rat_gold = {r: rationale_precision(cs, gold_v) for r, cs in by_gold.items()}
+        cond_of = dict(zip(R["rationale_id"], R["condition"])) if len(R) else {}
+        results["ppi_claim_precision"] = ppi_by_condition(rat_auto, rat_gold, cond_of)
     truth = rationale_truth(verdicts, claims)
     judg = read_jsonl(rd / "judgements.jsonl")
     b1 = [j for j in judg if j["judge"] == "B1"]
@@ -121,6 +146,8 @@ def main(argv=None) -> int:
     r.add_argument("--run-dir", required=True)
     r.add_argument("--n-boot", type=int, default=1000)
     r.add_argument("--parser2")
+    r.add_argument("--gold", help="human gold claims (JSONL) for PPI correction, §9.4")
+    r.add_argument("--gold-verdicts", help="verifier verdicts for the gold claims (JSONL)")
     p = sub.add_parser("power")
     p.add_argument("--simulate", action="store_true")
     p.add_argument("--n-sims", type=int, default=200)

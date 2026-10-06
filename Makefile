@@ -4,7 +4,7 @@ RUN ?= runs/smoke
 PANEL ?= $(RUN)/panel.npz
 MODELS ?= models.mock.yaml
 
-.PHONY: install test test-all calibrate smoke data-cn data-us refs pools narrate parse verify drivers judges analysis tables roster
+.PHONY: install test test-all calibrate smoke data-cn data-us refs pools narrate parse verify drivers exposures judges analysis tables roster
 
 install:
 	python3 -m venv .venv && $(PY) -m pip install -r requirements.txt && $(PY) -m pip install -e .
@@ -32,7 +32,7 @@ roster:
 smoke:
 	mkdir -p $(RUN)
 	$(PY) -m data synthetic --out $(PANEL) --stocks 60 --days 700
-	$(MAKE) pools narrate parse verify drivers judges analysis tables RUN=$(RUN) PANEL=$(PANEL) MODELS=$(MODELS) SCALE=0.1 K=1 FAST=--fast AUTHORS=$(MODELS)
+	$(MAKE) pools narrate parse verify drivers exposures judges analysis tables RUN=$(RUN) PANEL=$(PANEL) MODELS=$(MODELS) SCALE=0.1 K=1 FAST=--fast AUTHORS=$(MODELS)
 
 SCALE ?= 1.0
 K ?= 3
@@ -48,6 +48,8 @@ verify:
 	$(PY) -m verify run --formulas $(RUN)/formulas.jsonl --claims $(RUN)/claims.jsonl --rationales $(RUN)/rationales.jsonl --panel $(PANEL) --out $(RUN)/verdicts.jsonl $(FAST)
 drivers:
 	$(PY) -m verify drivers --formulas $(RUN)/formulas.jsonl --panel $(PANEL) --out $(RUN)/drivers.jsonl $(FAST)
+exposures:
+	$(PY) -m verify exposures --formulas $(RUN)/formulas.jsonl --panel $(PANEL) --out $(RUN)/exposures.jsonl $(FAST)
 judges:
 	$(PY) -m judges run --run-dir $(RUN) --panel $(PANEL) --models $(MODELS) --judges B1,B2,B4,B5 $(FAST)
 analysis:
