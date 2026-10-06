@@ -177,36 +177,45 @@ def sa_field(node: Node, rng: random.Random) -> list[tuple[Node, str, str]]:
 
 
 # ------------------------------------------------------------------------------------------ NL
-# misleading-label bank: label text -> claim it asserts (must be REFUTED by the verifier on the panel)
+# misleading-label bank: (label text, claim it asserts, codebook terms that express the same property).
+# The claim must be REFUTED by the verifier on the panel; label following is detected when a rationale
+# makes a resemblance/exposure claim with one of the terms (§11).
 NL_LABELS = [
-    ("20-day momentum", {"predicate": "RESEMBLES", "args": {"ref": "STREV_21d", "sign": "-"}}),
-    ("short-term reversal", {"predicate": "RESEMBLES", "args": {"ref": "short-term reversal", "sign": "+"}}),
-    ("12-1 month momentum", {"predicate": "RESEMBLES", "args": {"ref": "MOM_12_1", "sign": "+"}}),
-    ("low-volatility factor", {"predicate": "RESEMBLES", "args": {"ref": "VOL_20d", "sign": "-"}}),
-    ("high-volatility factor", {"predicate": "RESEMBLES", "args": {"ref": "VOL_20d", "sign": "+"}}),
-    ("Amihud illiquidity", {"predicate": "RESEMBLES", "args": {"ref": "AMIHUD_21d", "sign": "+"}}),
-    ("abnormal volume surprise", {"predicate": "RESEMBLES", "args": {"ref": "ABNVOL_60d", "sign": "+"}}),
-    ("52-week-high proximity", {"predicate": "RESEMBLES", "args": {"ref": "HIGH52", "sign": "+"}}),
-    ("lottery (MAX) effect", {"predicate": "RESEMBLES", "args": {"ref": "MAX_21d", "sign": "+"}}),
-    ("overnight gap", {"predicate": "RESEMBLES", "args": {"ref": "OVERNIGHT", "sign": "+"}}),
-    ("intraday buying pressure", {"predicate": "RESEMBLES", "args": {"ref": "INTRADAY_PRESSURE", "sign": "+"}}),
-    ("close-location value", {"predicate": "RESEMBLES", "args": {"ref": "CLV", "sign": "+"}}),
-    ("price-volume correlation", {"predicate": "RESEMBLES", "args": {"ref": "PVCORR_20d", "sign": "+"}}),
-    ("size (small-cap) factor", {"predicate": "RESEMBLES", "args": {"ref": "SIZE_PROXY", "sign": "-"}}),
+    ("20-day momentum", {"predicate": "RESEMBLES", "args": {"ref": "short-term momentum", "sign": "+"}},
+     ["short-term momentum", "momentum", "trend"]),
+    ("short-term reversal", {"predicate": "RESEMBLES", "args": {"ref": "short-term reversal", "sign": "+"}},
+     ["short-term reversal", "reversal", "mean reversion"]),
+    ("12-1 month momentum", {"predicate": "RESEMBLES", "args": {"ref": "momentum", "sign": "+"}}, ["momentum", "trend"]),
+    ("low-volatility factor", {"predicate": "RESEMBLES", "args": {"ref": "low volatility", "sign": "+"}}, ["low volatility"]),
+    ("high-volatility factor", {"predicate": "RESEMBLES", "args": {"ref": "volatility", "sign": "+"}},
+     ["volatility", "idiosyncratic volatility"]),
+    ("Amihud illiquidity", {"predicate": "RESEMBLES", "args": {"ref": "illiquidity", "sign": "+"}}, ["illiquidity"]),
+    ("abnormal volume surprise", {"predicate": "RESEMBLES", "args": {"ref": "abnormal volume", "sign": "+"}},
+     ["abnormal volume", "volume surprise"]),
+    ("52-week-high proximity", {"predicate": "RESEMBLES", "args": {"ref": "52-week high", "sign": "+"}}, ["52-week high"]),
+    ("lottery (MAX) effect", {"predicate": "RESEMBLES", "args": {"ref": "lottery", "sign": "+"}}, ["lottery", "max effect"]),
+    ("overnight gap", {"predicate": "RESEMBLES", "args": {"ref": "overnight return", "sign": "+"}}, ["overnight return"]),
+    ("intraday buying pressure", {"predicate": "RESEMBLES", "args": {"ref": "intraday pressure", "sign": "+"}},
+     ["intraday pressure", "buying pressure"]),
+    ("close-location value", {"predicate": "RESEMBLES", "args": {"ref": "close location", "sign": "+"}}, ["close location"]),
+    ("price-volume correlation", {"predicate": "RESEMBLES", "args": {"ref": "price-volume correlation", "sign": "+"}},
+     ["price-volume correlation"]),
+    ("size (small-cap) factor", {"predicate": "RESEMBLES", "args": {"ref": "small size", "sign": "+"}}, ["small size", "size"]),
 ]
 
 
-def nl_label(node: Node, ctx, rng: random.Random) -> tuple[str, dict, dict] | None:
+def nl_label(node: Node, ctx, rng: random.Random) -> tuple[str, dict, dict, list[str]] | None:
     """Pick a label whose asserted property the verifier REFUTES for this formula."""
     from verify.dispatcher import verify_claim
     from verify.verdicts import REFUTED
 
     bank = NL_LABELS[:]
     rng.shuffle(bank)
-    for text, claim in bank:
+    for text, claim, terms in bank:
         v = verify_claim(claim, node, ctx)
         if v.verdict == REFUTED:
-            return f"Name: {text} factor", claim, v.to_dict()
+            label = f"Name: {text}" if text.endswith("factor") or text.endswith("effect") else f"Name: {text} factor"
+            return label, claim, v.to_dict(), terms
     return None
 
 

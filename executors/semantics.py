@@ -8,7 +8,8 @@ import math
 
 import numpy as np
 
-# A rolling window is "constant" (Corr/Rsquare undefined -> NaN) iff its max equals its min exactly.
+# A rolling window is "constant" iff its max equals its min exactly: Corr/Rsquare are then NaN (undefined)
+# and Std/Var are exactly 0 (no floating-point residue from the summation order).
 CONSTANT_WINDOW_RULE = "max == min"
 # Standard deviation / variance / covariance use the sample (ddof=1) estimator.
 DDOF = 1
@@ -36,3 +37,19 @@ def snap(x: np.ndarray, digits: int = SNAP_DIGITS) -> np.ndarray:
 def exact_sum(values) -> float:
     """Correctly rounded sum (used for cross-sectional normalizers by both executors)."""
     return math.fsum(values)
+
+
+def exact_zscore(v: np.ndarray) -> np.ndarray | None:
+    """Cross-sectional z-score with correctly rounded sums (ddof=1); None if undefined (n < 2 or std 0).
+
+    Both executors use this convention so that z-scores that are 0 in exact arithmetic (e.g. the median
+    rank) are bitwise identical and cannot break ties differently downstream."""
+    n = len(v)
+    if n < 2:
+        return None
+    mu = math.fsum(v) / n
+    d = v - mu
+    var = math.fsum(d * d) / (n - 1)
+    if var <= 0:
+        return None
+    return d / math.sqrt(var)

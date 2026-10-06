@@ -1,0 +1,49 @@
+# Unit and property tests for every verifier routine run on each commit (§10.7 item 4);
+# the planted-claims calibration, the 500-formula executor agreement and the offline
+# end-to-end pipeline run as the "slow" job.
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  fast:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install
+        run: |
+          python -m pip install -r requirements.lock
+          python -m pip install --no-deps -e .
+      - name: Formula library parses
+        run: python -m pools check-library
+      - name: Fast tests (DSL, executors, verifier, pools, narration, parser, judges, analysis)
+        run: python -m pytest -m "not slow and not network"
+
+  slow:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    needs: fast
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install
+        run: |
+          python -m pip install -r requirements.lock
+          python -m pip install --no-deps -e .
+      - name: Slow tests (500-formula E1/E2 agreement, full calibration set, end-to-end pipeline)
+        run: python -m pytest -m "slow"
+      - name: Planted-claims calibration report
+        run: python -m verify calibrate --out runs/calibration
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: calibration
+          path: runs/calibration

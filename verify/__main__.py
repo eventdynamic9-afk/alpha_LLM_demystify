@@ -33,6 +33,30 @@ def _read_jsonl(path):
         return [json.loads(line) for line in fh if line.strip()]
 
 
+def _targeted(rec: dict) -> set:
+    from analysis.metrics import TARGETED
+
+    t = (rec.get("perturbation") or {}).get("type", "").replace("sa_", "")
+    return TARGETED.get(t, set())
+
+
+def _base_records(formulas: dict) -> dict:
+    """base_id -> parsed base formula (the K record, else the library entry)."""
+    from pools.library import by_short_id
+
+    out = {}
+    for f in formulas.values():
+        if f.get("pool") == "K" and f.get("base_id"):
+            out[f["base_id"]] = parse(f["dsl"])
+    for f in formulas.values():
+        b = f.get("base_id")
+        if b and b not in out:
+            lf = by_short_id(b)
+            if lf is not None:
+                out[b] = lf.node
+    return out
+
+
 def run(args) -> int:
     from .dispatcher import verify_claim
 
@@ -43,6 +67,7 @@ def run(args) -> int:
         rationale_formula = {r["rationale_id"]: r["formula_id"] for r in _read_jsonl(args.rationales)}
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
+    base_of = _base_records(formulas)
     n = 0
     with open(out, "w", encoding="utf-8") as fh:
         for c in _read_jsonl(args.claims):
@@ -50,8 +75,14 @@ def run(args) -> int:
             rec = formulas.get(fid)
             node = parse(rec["dsl"]) if rec else None
             v = verify_claim(c, node, ctx)
-            fh.write(json.dumps({"claim_id": c["claim_id"], "rationale_id": c.get("rationale_id"),
-                                 "formula_id": fid, "market": ctx.panel.market, **v.to_dict()}, default=float) + "\n")
+            row = {"claim_id": c["claim_id"], "rationale_id": c.get("rationale_id"), "formula_id": fid,
+                   "market": ctx.panel.market, **v.to_dict()}
+            # recall anchoring (§11): targeted-property claims of SA rationales are also checked on the base formula
+            if rec and rec.get("pool") == "SA" and c["predicate"] in _targeted(rec):
+                base = base_of.get(rec.get("base_id"))
+                if base is not None:
+                    row["base_verdict"] = verify_claim(c, base, ctx).verdict
+            fh.write(json.dumps(row, default=float) + "\n")
             n += 1
     print(f"wrote {n} verdicts to {out}")
     return 0

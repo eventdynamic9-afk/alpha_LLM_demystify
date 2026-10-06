@@ -23,7 +23,7 @@ from scipy.stats import percentileofscore
 
 from dsl.ast import Node
 
-from ..semantics import TIE_SENSITIVE, exact_sum, snap
+from ..semantics import TIE_SENSITIVE, exact_sum, exact_zscore, snap
 
 
 class E1Executor:
@@ -165,10 +165,21 @@ class E1Executor:
         return self._roll(a, n).sum()
 
     def _op_Std(self, n, a):
-        return self._roll(a, n).std()
+        if self.qlib_native:
+            return self._roll(a, n).std()
+        return self._exact_var(n, a).pow(0.5)
 
     def _op_Var(self, n, a):
-        return self._roll(a, n).var()
+        if self.qlib_native:
+            return self._roll(a, n).var()
+        return self._exact_var(n, a)
+
+    def _exact_var(self, n, a):
+        """Per-window two-pass sample variance (pandas' online rolling variance loses up to ~1e-8 when the
+        within-window spread is tiny); exactly 0 for constant windows (canonical semantics)."""
+        w = int(n.params[0])
+        var = self._roll(a, n).apply(lambda x: x.var(ddof=1), raw=True)
+        return var.where(~self._constant(a, w), 0.0).where(var.notna())
 
     def _op_Max(self, n, a):
         return self._roll(a, n).max()
@@ -319,8 +330,16 @@ class E1Executor:
 
     def _op_CSZScore(self, n, a):
         m = self._members(a)
-        sd = m.std(axis=1, ddof=1)
-        return m.sub(m.mean(axis=1), axis=0).div(sd.where(sd != 0), axis=0)
+
+        def row(r: pd.Series) -> pd.Series:
+            v = r.dropna()
+            z = exact_zscore(v.to_numpy(dtype=np.float64))
+            out = pd.Series(np.nan, index=r.index)
+            if z is not None:
+                out[v.index] = z
+            return out
+
+        return m.apply(row, axis=1)
 
     def _op_CSScale(self, n, a):
         m = self._members(a)

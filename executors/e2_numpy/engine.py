@@ -10,7 +10,7 @@ from scipy.stats import rankdata
 from dsl.ast import Node
 from dsl.operators import OPS
 
-from ..semantics import TIE_SENSITIVE, exact_sum, snap
+from ..semantics import TIE_SENSITIVE, exact_sum, exact_zscore, snap
 
 _CHUNK_ELEMS = 4_000_000
 
@@ -174,6 +174,7 @@ def _window_stat(op: str, w: np.ndarray, n: int, params) -> np.ndarray:
     if op in ("Std", "Var"):
         mu = w.mean(axis=2, keepdims=True)
         var = ((w - mu) ** 2).sum(axis=2) / (n - 1)
+        var = np.where(w.max(axis=2) == w.min(axis=2), 0.0, var)     # constant window -> exactly 0
         return np.sqrt(var) if op == "Std" else var
     if op == "Max":
         return w.max(axis=2)
@@ -251,12 +252,9 @@ def _cross_section(op: str, x: np.ndarray, member: np.ndarray, params) -> np.nda
         if op == "CSRank":
             out[t, idx] = _avg_rank(v) / len(v)
         elif op == "CSZScore":
-            if len(v) < 2:
-                continue
-            sd = v.std(ddof=1)
-            if sd == 0:
-                continue
-            out[t, idx] = (v - v.mean()) / sd
+            z = exact_zscore(v)
+            if z is not None:
+                out[t, idx] = z
         else:
             a = float(params[0])
             s = exact_sum(np.abs(v))

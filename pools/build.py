@@ -131,11 +131,12 @@ def build_arm_b(ctx, seed: int | None = None, scale: float = 1.0, search: bool =
         if res is None:
             nl_fail.append(f.lib_id)
             continue
-        label, claim, verdict = res
+        label, claim, verdict, terms = res
         recs.append(FormulaRecord.from_node(f"B-{f.short_id}-NL", "B", "NL", f.node, presented=f.source_text,
                                             notation=_NOTATION[f.library], base_id=f.short_id, label=label,
                                             perturbation={"type": "misleading_label", "target_property": claim,
-                                                          "expected_change": "label property REFUTED", "verdict": verdict["verdict"]},
+                                                          "label_terms": terms, "expected_change": "label property REFUTED",
+                                                          "verdict": verdict["verdict"]},
                                             stratum=f"t{terc[f.lib_id]}", seed=seed,
                                             meta={"library": f.library, "lib_id": f.lib_id}))
     report["nl_without_refuted_label"] = nl_fail

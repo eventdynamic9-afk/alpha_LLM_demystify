@@ -25,9 +25,12 @@ def reference_factor_returns(ctx, rows: np.ndarray) -> tuple[np.ndarray, list[st
         names.append(f"LS_{name}")
         assets.append(decile_portfolios(sig, fwd, ctx.panel.member, 10))
     ctrl = ctx.factors.controls()
+    external = ctx.panel.market == "US" and ctx.external_factors is not None
     for c in ctrl.columns:
-        cols.append(ctrl[c].to_numpy())
-        names.append(c)
+        # self-built factors other than MKT are long-shorts of characteristics already in H (collinear)
+        if external or c == "MKT":
+            cols.append(ctrl[c].to_numpy())
+            names.append(c)
     H = np.column_stack(cols)[rows]
     R = np.concatenate(assets, axis=1)[rows]
     return H, names, R

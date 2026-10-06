@@ -1,0 +1,15 @@
+# Direct dependencies (exact versions of the reference environment are pinned in requirements.lock)
+numpy>=1.26
+pandas>=2.1
+scipy>=1.11
+statsmodels>=0.14
+scikit-learn>=1.3
+pyyaml>=6.0
+jsonschema>=4.18
+matplotlib>=3.8
+z3-solver>=4.12
+pytest>=7.4
+hypothesis>=6.90
+# Optional, data rebuild (network): baostock yfinance openassetpricing akshare
+# Optional, real Qlib engine for E1 (Python <= 3.12 wheels): pyqlib
+# Optional, B5 NLI cross-encoder: transformers torch
