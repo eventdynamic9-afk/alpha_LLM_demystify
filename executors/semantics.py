@@ -22,10 +22,23 @@ SNAP_DIGITS = 12
 TIE_SENSITIVE = ("TsRank", "CSRank", "IdxMax", "IdxMin", "Gt", "Ge", "Lt", "Le", "Eq", "Ne", "Sign")
 
 
+# Values below RESIDUE_REL x the date's cross-sectional max |x| are summation residues of an exact zero
+# (e.g. rank sums that cancel) and are set to 0 before rounding, so they tie with exact zeros. The scale is
+# taken per date (row), never over time, so the rule is causal (§6.3).
+RESIDUE_REL = 1e-12
+
+
 def snap(x: np.ndarray, digits: int = SNAP_DIGITS) -> np.ndarray:
-    """Round to ``digits`` significant digits (NaN/inf/0 unchanged)."""
+    """Zero same-date residues, then round to ``digits`` significant digits (NaN/inf/0 unchanged)."""
     x = np.asarray(x, dtype=np.float64)
     with np.errstate(all="ignore"):
+        if x.ndim == 2 and x.size:
+            import warnings
+
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", RuntimeWarning)
+                scale = np.nanmax(np.where(np.isfinite(x), np.abs(x), np.nan), axis=1, keepdims=True)
+            x = np.where(np.isfinite(x) & (np.abs(x) <= RESIDUE_REL * np.nan_to_num(scale)), 0.0, x)
         ax = np.abs(x)
         ok = np.isfinite(x) & (ax > 0)
         e = np.floor(np.log10(np.where(ok, ax, 1.0)))

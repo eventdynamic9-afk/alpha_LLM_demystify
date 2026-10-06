@@ -233,3 +233,27 @@ def test_window_edges_and_identities(seed, n):
         c = ex.evaluate(parse(f"Corr($close, 2*$close+3, {max(n, 3)})"), p)
         np.testing.assert_allclose(c[max(n, 3) - 1:], 1.0, rtol=1e-9)
         np.testing.assert_allclose(np.nansum(np.abs(ex.evaluate(parse("CSScale($close-$open)"), p)), axis=1), 1.0)
+
+
+def test_tied_rank_sums_agree():
+    """Rank sums that cancel to an exact zero leave summation residues; both executors must tie them."""
+    from pools.library import get
+
+    p = synthetic_panel(25, 300, seed=3)
+    for lid in ("alpha101_088", "gtja191_140"):
+        node = get(lid).node
+        ag = agreement(E1.evaluate(node, p), E2.evaluate(node, p), node)
+        assert ag.ok and ag.rule == "abs_tol", (lid, ag)
+
+
+@pytest.mark.slow
+def test_e1_e2_agree_on_every_library_formula():
+    from pools.library import library
+
+    p = synthetic_panel(25, 300, seed=3)
+    fails = []
+    for lid, f in library().items():
+        ag = agreement(E1.evaluate(f.node, p), E2.evaluate(f.node, p), f.node)
+        if not ag.ok:
+            fails.append((lid, ag))
+    assert not fails, fails[:5]

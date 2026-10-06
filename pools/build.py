@@ -20,7 +20,7 @@ from pathlib import Path
 import numpy as np
 
 from configs import study
-from dsl import Node, canonical_hash, descriptors, parse
+from dsl import Node, canonical_hash, descriptors, effective_lookback, parse
 from verify.dispatcher import verify_claim
 from verify.verdicts import REFUTED, SUPPORTED
 from verify.identity import numerically_equivalent
@@ -196,6 +196,7 @@ def build_arm_b(ctx, seed: int | None = None, scale: float = 1.0, search: bool =
     # counted as shortfall.
     from dsl.monotonicity import AMB, sign_map
     from dsl.serialize import to_notation
+    from verify.static import uses_window
     from verify.stats import daily_spearman, lag1_rank_autocorr
 
     sa_dedup = {t: PoolDeduper(ctx) for t in ("sign", "window", "field")}
@@ -241,19 +242,24 @@ def build_arm_b(ctx, seed: int | None = None, scale: float = 1.0, search: bool =
             v, old, new = w
             rep = check_validity(v, ctx, sa_dedup["window"], truncation=False)
             if rep["valid"]:
-                lb_base = verify_claim({"predicate": "LOOKBACK", "args": {"window": old}}, f.node, ctx).verdict
-                lb_var = verify_claim({"predicate": "LOOKBACK", "args": {"window": old}}, v, ctx).verdict
-                hz = {"base": descriptors(f.node)["max_lookback"] + 1, "variant": descriptors(v)["max_lookback"] + 1}
+                # the window parameter `old` must be gone from the variant and the effective lookback must change
+                # (LOOKBACK claims are decided on the effective lookback, §10.2; recorded for both formulas)
+                L_b, L_v = effective_lookback(f.node), effective_lookback(v)
+                lb_base = verify_claim({"predicate": "LOOKBACK", "args": {"window": L_b + 1}}, f.node, ctx).verdict
+                lb_var = verify_claim({"predicate": "LOOKBACK", "args": {"window": L_b + 1}}, v, ctx).verdict
+                hz = {"base": L_b + 1, "variant": L_v + 1}
                 rows = ctx.rows("train")
                 to_b = float(np.nanmean(lag1_rank_autocorr(ctx.signal(f.node), rows)))
                 to_v = float(np.nanmean(lag1_rank_autocorr(ctx.signal(v), rows)))
-                ok = lb_base == SUPPORTED and lb_var == REFUTED and hz["base"] != hz["variant"]
+                ok = (uses_window(f.node, old) and not uses_window(v, old) and lb_base == SUPPORTED
+                      and lb_var == REFUTED and hz["base"] != hz["variant"])
                 if ok:
                     rec = FormulaRecord.from_node(f"B-{f.short_id}-SA-window", "B", "SA", v, presented=to_notation(v, notation),
                                                   notation=notation, base_id=f.short_id, validity=rep,
                                                   perturbation={"type": "sa_window", "target_property": f"LOOKBACK({old}) / HORIZON",
                                                                 "expected_change": f"{old} -> {new}", "span_days": hz,
-                                                                "base_lookback_verdict": lb_base, "variant_lookback_verdict": lb_var,
+                                                                "lookback_claim": L_b + 1, "base_lookback_verdict": lb_base,
+                                                                "variant_lookback_verdict": lb_var,
                                                                 "lag1_rank_autocorr": {"base": round(to_b, 4),
                                                                                        "variant": round(to_v, 4)},
                                                                 "confirmed": True},
@@ -310,7 +316,8 @@ def _accept_fn(ctx, dedup: PoolDeduper):
 
 
 def build_novel(ctx, target: list[Node], n: int, seed: int, search: bool, report: dict,
-                own_pools: list[FormulaRecord] | None = None, allow_pending_search: bool = False) -> list[FormulaRecord]:
+                own_pools: list[FormulaRecord] | None = None, allow_pending_search: bool = False,
+                trial_log: str | Path | None = None) -> list[FormulaRecord]:
     """N pool, built after every other pool so that novelty check 1 covers all of them (§7.2). Without
     completed searches a formula's novelty status is "pending_search"; such formulas are kept only when
     ``allow_pending_search`` (pilot runs without search access), and the report says so."""
@@ -326,6 +333,8 @@ def build_novel(ctx, target: list[Node], n: int, seed: int, search: bool, report
     n_rand = n // 2
     rand = matched_random_trees(target, n_rand * 4, _accept_fn(ctx, lib_dedup), seed=seed)
     gp = run_gp(ctx, GPConfig(population=60, generations=5, seed=seed), n_best=n * 6)
+    n_family = f"N-gp-seed{seed}"
+    write_trial_log(trial_log, n_family, gp.trials)
     out, own = [], set(own_hashes)
     fails = Counter()
     quota = bin_quota(target, n - n_rand)
@@ -358,20 +367,39 @@ def build_novel(ctx, target: list[Node], n: int, seed: int, search: bool, report
             fails["rho" if not nov["rho_ok"] else "canonical" if not nov["canonical_unique"] else "search"] += 1
             continue
         own.add(canonical_hash(node))
+        gmeta = ({"trial_family": n_family, **({"trial_log_path": str(trial_log)} if trial_log else {})}
+                 if src == "gp" else {})
         out.append(FormulaRecord.from_node(f"B-N-{len(out):03d}", "B", "N", node, validity=rep, novelty=nov,
-                                           seed=seed, created_at=created, meta={"generator": src,
-                                                                                "gp_trials": len(gp.trials) if src == "gp" else None}))
+                                           trials=len(gp.trials) if src == "gp" else 1, seed=seed, created_at=created,
+                                           meta={"generator": src, "gp_trials": len(gp.trials) if src == "gp" else None,
+                                                 **gmeta}))
     report["novel"] = {"requested": n, "built": len(out), "rejections": dict(fails), "gp_trials": len(gp.trials),
                        "novelty_status": dict(Counter(r.novelty["status"] for r in out)),
                        "own_pool_formulas_checked": len(own_hashes)}
     return out
 
 
-def build_p3(ctx, target: list[Node], n: int = 60, seed: int = 11, report: dict | None = None) -> list[FormulaRecord]:
+def write_trial_log(path: str | Path | None, family: str, trials: list[dict]) -> None:
+    """Append every evaluated GP candidate to the trial log read by ``verify`` (DSR / PBO, §7.1, §10.4)."""
+    if path is None:
+        return
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "a", encoding="utf-8") as fh:
+        for t in trials:
+            fh.write(json.dumps({"family": family, "formula": t["formula"], "fitness": t.get("fitness"),
+                                 "raw_ic": t.get("raw_ic"), "generation": t.get("generation")}, default=float) + "\n")
+
+
+def build_p3(ctx, target: list[Node], n: int = 60, seed: int = 11, report: dict | None = None,
+             trial_log: str | Path | None = None) -> list[FormulaRecord]:
     """P3a GP (n/2) + P3b random grammar (n/2), complexity matched to ``target``."""
     report = report if report is not None else {}
     dedup = PoolDeduper(ctx)
     gp = run_gp(ctx, GPConfig(seed=seed), n_best=n * 6)
+    family = f"P3a-seed{seed}"
+    write_trial_log(trial_log, family, gp.trials)
+    tmeta = {"trial_family": family, **({"trial_log_path": str(trial_log)} if trial_log else {})}
     recs = []
     from dsl.complexity import complexity_bin
 
@@ -386,7 +414,7 @@ def build_p3(ctx, target: list[Node], n: int = 60, seed: int = 11, report: dict 
             filled[b] += 1
             fid = f"P3a-{len(recs):03d}"
             recs.append(FormulaRecord.from_node(fid, "A", "P3a", node, validity=rep, trials=len(gp.trials), seed=seed,
-                                                meta={"gp_fitness": fit}))
+                                                meta={"gp_fitness": fit, **tmeta}))
             dedup.add(fid, node, ctx.signal(node))
         if sum(filled.values()) >= n // 2:
             break
@@ -398,7 +426,7 @@ def build_p3(ctx, target: list[Node], n: int = 60, seed: int = 11, report: dict 
             if rep["valid"]:
                 fid = f"P3a-{len(recs):03d}"
                 recs.append(FormulaRecord.from_node(fid, "A", "P3a", node, validity=rep, trials=len(gp.trials), seed=seed,
-                                                    meta={"gp_fitness": fit, "bin_relaxed": True}))
+                                                    meta={"gp_fitness": fit, "bin_relaxed": True, **tmeta}))
                 dedup.add(fid, node, ctx.signal(node))
     rand = matched_random_trees(target, n - len(recs), _accept_fn(ctx, dedup), seed=seed + 1)
     for i, (node, rep) in enumerate(rand):
@@ -431,13 +459,16 @@ def build_all(ctx, out_dir: str | Path, scale: float = 1.0, search: bool = False
         if a_recs:
             target = [parse(r.dsl) for r in a_recs if r.pool in ("P1", "P2")]
         report["arm_a_authored"] = dict(Counter(f"{r.pool}_{r.stratum or ''}|{r.author_model}" for r in a_recs))
-    a_recs += build_p3(ctx, target, n_arm_a or max(2, int(round(60 * scale))), report=report)
+    trial_log = out_dir / "trials_gp.jsonl"
+    if trial_log.exists():
+        trial_log.unlink()
+    a_recs += build_p3(ctx, target, n_arm_a or max(2, int(round(60 * scale))), report=report, trial_log=trial_log)
     # N last: generated now (after the latest narrator cutoff), complexity matched to the base set, and
     # canonically distinct from every formula in every other pool
     n_novel = max(2, int(round(study()["arms"]["arm_b"]["pools"]["N"]["formulas"] * scale)))
     seed_n = (study()["seed"] if seed is None else seed) + 7
     n_recs = build_novel(ctx, report.pop("_base_nodes"), n_novel, seed_n, search, report, own_pools=recs + a_recs,
-                         allow_pending_search=allow_pending_search)
+                         allow_pending_search=allow_pending_search, trial_log=trial_log)
     allr = recs + a_recs + n_recs
     write_jsonl(allr, out_dir / "formulas.jsonl")
     report["counts"] = dict(Counter(r.pool if r.pool != "SA" else f"SA_{r.perturbation['type'][3:]}" for r in allr))

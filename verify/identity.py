@@ -56,7 +56,10 @@ def verify_identity(node: Node, ctx, library_id: str) -> Verdict:
     if status == "nonexistent":
         return Verdict(REFUTED, "identity", {"reason": f"{library_id} does not exist in the named library"})
     if status != "available":
-        return Verdict(UNVERIFIABLE, "identity", {"reason": f"{library_id} is {status} on the OHLCV panel"})
+        from pools.library import library_id_reason
+
+        return Verdict(UNVERIFIABLE, "identity", {"reason": f"{library_id} is {status} on the OHLCV panel",
+                                                  "status": status, "detail": library_id_reason(library_id)})
     lf = lib_get(library_id)
     if canonical_equal(node, lf.node):
         return Verdict(SUPPORTED, "identity", {"rule": "canonical", "library_id": library_id})
