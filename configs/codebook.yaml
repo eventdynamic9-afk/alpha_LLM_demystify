@@ -1,0 +1,189 @@
+# Claim codebook (§9.1, §9.5, Appendix C). Operational definitions are frozen with the pre-registration.
+version: "v2.0-prereg-draft"
+
+# ---------------------------------------------------------------------------------------------
+# Claim taxonomy (§9.1): predicate -> claim type and verification route
+# ---------------------------------------------------------------------------------------------
+predicates:
+  DEPENDS_ON:  {type: C1, subtype: 1, verify: static_dependency}
+  SIGN:        {type: C1, subtype: 2, verify: monotonicity_then_nudge}
+  MONO:        {type: C1, subtype: 3, verify: nudge}
+  LOOKBACK:    {type: C1, subtype: 4, verify: static_lookback}
+  HORIZON:     {type: C1, subtype: 4, verify: static_lookback_bins}
+  XSEC:        {type: C1, subtype: 5, verify: static_xsec}
+  INVARIANT:   {type: C1, subtype: 6, verify: metamorphic}
+  RANGE:       {type: C1, subtype: 7, verify: static_range_then_empirical}
+  STRUCT:      {type: C1, subtype: 8, verify: ast_pattern}
+  RESEMBLES:   {type: C2, subtype: 1, verify: signal_corr}
+  INDEPENDENT: {type: C2, subtype: 2, verify: signal_corr_tost}
+  EXPOSED:     {type: C2, subtype: 2, verify: exposure}
+  TURNOVER:    {type: C2, subtype: 3, verify: rank_autocorr}
+  REGIME:      {type: C2, subtype: 4, verify: regime_interaction}
+  PRED_SIGN:   {type: C2, subtype: 5, verify: rank_ic_sign}
+  NOVEL:       {type: C3, subtype: 1, verify: originality}
+  BETTER_THAN: {type: C3, subtype: 2, verify: paired_oos}
+  PERF:        {type: C4, subtype: 1, verify: oos_performance}
+  THEORY:      {type: C5, subtype: 1, verify: unverifiable}
+  IDENTITY:    {type: C6, subtype: 1, verify: identity}
+  VARIANT_OF:  {type: C6, subtype: 2, verify: identity_variant}
+
+hedge_levels: [absolute, typical, possible]
+polarities: [affirm, deny]
+
+# ---------------------------------------------------------------------------------------------
+# Horizon bins (§9.5, §10.6): trading days
+# ---------------------------------------------------------------------------------------------
+horizon_bins:
+  very_short: [0, 5]
+  short: [0, 21]          # "short-term" = <= 21 trading days (includes very_short)
+  medium: [22, 126]
+  long: [127, 100000]
+horizon_words:
+  very_short: ["very short", "very short-term", "next day", "daily", "overnight", "1-day", "one-day", "intraday"]
+  short: ["short-term", "short term", "short horizon", "short-horizon", "near-term", "weekly", "few days", "a week", "a month", "monthly", "one month"]
+  medium: ["medium-term", "medium term", "intermediate", "quarterly", "several months", "a quarter", "few months"]
+  long: ["long-term", "long term", "long horizon", "yearly", "annual", "a year", "12-month", "multi-month"]
+
+# ---------------------------------------------------------------------------------------------
+# Appendix C: term in rationale -> reference signal(s). Multiple refs = "report both";
+# verdict aggregation over operationalizations: SUPPORTED if any SUPPORTED, REFUTED if all REFUTED,
+# otherwise UNRESOLVED (pre-registered).
+# sign: +1 if the term names the signal itself, -1 if it names its opposite.
+# ---------------------------------------------------------------------------------------------
+terms:
+  short-term reversal:      {refs: [STREV_5d, STREV_21d], sign: 1}
+  reversal:                 {refs: [STREV_1d, STREV_5d, STREV_21d], sign: 1}
+  mean reversion:           {refs: [STREV_1d, STREV_5d, STREV_21d], sign: 1}
+  short-term momentum:      {refs: [STREV_5d, STREV_21d], sign: -1}
+  momentum:                 {refs: [MOM_12_1], variants: [MOM_6_1], sign: 1}
+  trend:                    {refs: [MOM_12_1, MOM_6_1], sign: 1}
+  volatility:               {refs: [VOL_20d, VOL_60d], sign: 1}
+  low volatility:           {refs: [VOL_20d, VOL_60d], sign: -1}
+  idiosyncratic volatility: {refs: [IVOL_60d], sign: 1}
+  illiquidity:              {refs: [AMIHUD_21d], sign: 1}
+  liquidity:                {refs: [AMIHUD_21d], sign: -1}
+  abnormal volume:          {refs: [ABNVOL_60d], sign: 1}
+  volume surprise:          {refs: [ABNVOL_60d], sign: 1}
+  lottery:                  {refs: [MAX_21d], sign: 1}
+  max effect:               {refs: [MAX_21d], sign: 1}
+  intraday pressure:        {refs: [INTRADAY_PRESSURE], variants_cn: [INTRADAY_PRESSURE_VWAP], sign: 1}
+  buying pressure:          {refs: [INTRADAY_PRESSURE], variants_cn: [INTRADAY_PRESSURE_VWAP], sign: 1}
+  52-week high:             {refs: [HIGH52], sign: 1}
+  beta:                     {refs: [BETA_252], sign: 1}
+  low beta:                 {refs: [BETA_252], sign: -1}
+  skewness:                 {refs: [SKEW_21d], sign: 1}
+  close location:           {refs: [CLV], sign: 1}
+  overnight return:         {refs: [OVERNIGHT], sign: 1}
+  intraday return:          {refs: [INTRADAY_RET], sign: 1}
+  price-volume correlation: {refs: [PVCORR_20d], sign: 1}
+  size:                     {refs: [SIZE_PROXY], sign: 1}
+  small size:               {refs: [SIZE_PROXY], sign: -1}
+
+# Reference signal definitions (Appendix C / §5.5). "dsl" entries are executed by the same executors
+# as audited formulas (same panel, same adjustments); "computed" entries are implemented in
+# verify/references.py because they need the market return.
+reference_signals:
+  STREV_1d:   {dsl: "-1*($close/Ref($close, 1)-1)", description: "-(1-day return)"}
+  STREV_5d:   {dsl: "-1*($close/Ref($close, 5)-1)", description: "-(5-day return)"}
+  STREV_21d:  {dsl: "-1*($close/Ref($close, 21)-1)", description: "-(21-day return)"}
+  MOM_12_1:   {dsl: "Ref($close, 21)/Ref($close, 252)-1", description: "12-1 month return, skipping the most recent 21 days"}
+  MOM_6_1:    {dsl: "Ref($close, 21)/Ref($close, 126)-1", description: "6-1 month return, skipping the most recent 21 days"}
+  HIGH52:     {dsl: "$close/Max($close, 252)", description: "close / 252-day max close"}
+  VOL_20d:    {dsl: "Std($close/Ref($close, 1)-1, 20)", description: "20-day std of daily returns"}
+  VOL_60d:    {dsl: "Std($close/Ref($close, 1)-1, 60)", description: "60-day std of daily returns"}
+  IVOL_60d:   {computed: ivol, window: 60, description: "std of residuals from 60-day market-model regression"}
+  MAX_21d:    {dsl: "Max($close/Ref($close, 1)-1, 21)", description: "maximum daily return over 21 days"}
+  AMIHUD_21d: {dsl: "Mean(Abs($close/Ref($close, 1)-1)/$amount, 21)", description: "mean |r| / dollar volume over 21 days"}
+  ABNVOL_60d: {dsl: "$volume/Mean($volume, 60)", description: "volume / 60-day mean volume"}
+  PVCORR_20d: {dsl: "Corr($close, Log($volume+1), 20)", description: "20-day price-volume correlation"}
+  BETA_252:   {computed: beta, window: 252, description: "252-day market beta"}
+  SKEW_21d:   {computed: skew, window: 21, description: "skewness of daily returns over 21 days"}
+  CLV:        {dsl: "(($close-$low)-($high-$close))/($high-$low)", description: "close-location value"}
+  OVERNIGHT:  {dsl: "$open/Ref($close, 1)-1", description: "overnight return"}
+  INTRADAY_RET: {dsl: "$close/$open-1", description: "intraday (open-to-close) return"}
+  INTRADAY_PRESSURE: {dsl: "($close-$open)/($high-$low)", description: "(close - open) / (high - low)"}
+  INTRADAY_PRESSURE_VWAP: {dsl: "$close-$vwap", description: "close - VWAP (CN)", markets: [CN]}
+  SIZE_PROXY: {dsl: "Log(Mean($amount, 21))", description: "log 21-day mean dollar volume (size proxy; OHLCV has no shares outstanding)"}
+
+# Technical-indicator templates for VARIANT_OF (§10.2 identity claims)
+variant_templates:
+  RSI:        {dsl: "Mean(Greater($close-Ref($close, 1), 0), 14)/(Mean(Greater($close-Ref($close, 1), 0), 14)+Mean(Greater(Ref($close, 1)-$close, 0), 14))", words: ["rsi", "relative strength index"]}
+  BOLLINGER:  {dsl: "($close-Mean($close, 20))/(2*Std($close, 20))", words: ["bollinger", "%b"]}
+  STOCHASTIC: {dsl: "($close-Min($low, 14))/(Max($high, 14)-Min($low, 14))", words: ["stochastic", "%k", "stochastic oscillator"]}
+  WILLIAMS_R: {dsl: "-1*(Max($high, 14)-$close)/(Max($high, 14)-Min($low, 14))", words: ["williams %r", "williams r"]}
+  ROC:        {dsl: "$close/Ref($close, 10)-1", words: ["rate of change", "roc"]}
+  MA_CROSS:   {dsl: "Mean($close, 5)/Mean($close, 20)", words: ["moving average crossover", "ma crossover", "golden cross"]}
+  MACD:       {dsl: "Mean($close, 12)/Mean($close, 26)-1", words: ["macd"], note: "SMA approximation; the DSL has no EMA"}
+
+# STRUCT patterns (C1.8): matched on canonical trees by verify/static.py
+struct_patterns:
+  ratio(MA_s, MA_l): "ratio of a short to a long moving average"
+  diff(MA_s, MA_l): "difference of a short and a long moving average"
+  zscore: "(x - Mean(x, n)) / Std(x, n)"
+  corr: "rolling correlation between two inputs"
+  roc: "rate of change x / Ref(x, d)"
+  range_position: "(x - Min(low, n)) / (Max(high, n) - Min(low, n))"
+  rank: "cross-sectional rank"
+  ts_rank: "time-series rank"
+
+# Scopes for conditional claims (verification restricted to these stock-days)
+scopes:
+  small caps:        {signal: SIZE_PROXY, tercile: bottom}
+  large caps:        {signal: SIZE_PROXY, tercile: top}
+  illiquid stocks:   {signal: AMIHUD_21d, tercile: top}
+  liquid stocks:     {signal: AMIHUD_21d, tercile: bottom}
+  volatile stocks:   {signal: VOL_20d, tercile: top}
+  low-volatility stocks: {signal: VOL_20d, tercile: bottom}
+
+# Regimes for REGIME claims (§10.3)
+regimes:
+  high_vol:        {indicator: market_realized_vol_20d, tercile: top, words: ["volatile markets", "high volatility", "turbulent", "market stress", "crisis"]}
+  low_vol:         {indicator: market_realized_vol_20d, tercile: bottom, words: ["calm markets", "low volatility", "quiet markets"]}
+  up_market:       {indicator: market_return_20d, rule: positive, words: ["bull market", "rising markets", "up markets"]}
+  down_market:     {indicator: market_return_20d, rule: negative, words: ["bear market", "falling markets", "down markets", "sell-offs"]}
+  high_dispersion: {indicator: cross_sectional_return_std, tercile: top, words: ["high dispersion", "dispersed"]}
+
+# Inputs outside the OHLCV(+VWAP, amount) panel: DEPENDS_ON claims on these are REFUTED (§9.5)
+out_of_universe_inputs:
+  analyst_revisions: ["analyst revision", "analyst revisions", "earnings revisions", "analyst forecast", "analyst estimates"]
+  earnings: ["earnings", "earnings surprise", "eps", "sue", "earnings announcement"]
+  fundamentals: ["book value", "book-to-market", "profitability", "roe", "accruals", "balance sheet", "fundamentals", "cash flow", "sales growth"]
+  sentiment: ["news", "sentiment", "social media", "text"]
+  short_interest: ["short interest", "short selling", "borrow fee"]
+  order_book: ["order book", "order flow imbalance", "bid-ask", "quotes", "tick data"]
+  fund_flows: ["fund flows", "institutional ownership", "northbound flows"]
+  market_cap: ["market capitalization", "market cap", "shares outstanding", "float"]
+  industry: ["industry", "sector"]
+  options: ["implied volatility", "options", "option-implied"]
+  macro: ["interest rates", "macro", "inflation", "gdp"]
+
+# Field lexicon used by the rule-based extractor (§9.2 E1)
+field_lexicon:
+  close: ["close", "closing price", "close price", "closes"]
+  open: ["open", "opening price", "open price"]
+  high: ["high", "daily high", "intraday high", "highs"]
+  low: ["low", "daily low", "intraday low", "lows"]
+  volume: ["volume", "trading volume", "share volume", "volumes"]
+  vwap: ["vwap", "volume-weighted average price", "volume weighted average price"]
+  amount: ["amount", "dollar volume", "traded value", "turnover value"]
+  returns: ["return", "returns", "price change", "price changes"]
+derived_inputs:            # quantities the nudge test can perturb (verify/nudge.py)
+  returns: {fields: [close]}
+  abn_vol: {fields: [volume]}
+  volatility: {fields: [close]}
+  range: {fields: [high, low]}
+  intraday: {fields: [close, open]}
+
+# Identity / provenance cue patterns (C6)
+identity_patterns:
+  alpha101: ['(?:worldquant\s+)?alpha\s*#?\s*(\d{1,3})\b', 'alpha101[\s_#-]*(\d{1,3})']
+  gtja191: ['gtja(?:[\s_-]*191)?\s*#?\s*(\d{1,3})\b', 'guotai\s+junan\s*#?\s*(\d{1,3})']
+  alpha158: ['alpha158\s+([A-Z]{3,5}\d{0,2})\b']
+
+# Hedge cues
+hedge_lexicon:
+  possible: ["may", "might", "could", "possibly", "potentially", "perhaps", "can"]
+  typical: ["typically", "tends to", "tend to", "usually", "often", "generally", "on average", "likely"]
+
+# Theory/mechanism cues (C5, never scored)
+theory_cues: ["because investors", "overreact", "underreact", "behavioral", "behavioural", "attention", "liquidity provision", "compensation for", "risk premium", "institutional", "informed traders", "noise traders", "herding", "disposition effect", "limits to arbitrage", "inventory"]

@@ -1,0 +1,2 @@
+Diagnostics computed on {train_window}:
+{diagnostics_table}

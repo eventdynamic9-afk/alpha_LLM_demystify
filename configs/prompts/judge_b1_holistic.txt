@@ -1,0 +1,14 @@
+You are evaluating an alpha factor produced by an automated research system.
+Rate how consistent the factor DESCRIPTION is with the factor EXPRESSION.
+Score from 0 to 1, where 1 means the description accurately and completely reflects what the
+expression computes and 0 means it is unrelated or contradictory.
+{hypothesis_block}
+Factor description:
+<<<
+{description}
+>>>
+Factor expression: {expression}
+Field glossary: {field_glossary}
+Operator glossary: {operator_glossary}
+
+Return only JSON: {"c2": <score between 0 and 1>{c1_field}, "explanation": "<one sentence>"}

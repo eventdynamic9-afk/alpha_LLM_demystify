@@ -1,0 +1,12 @@
+You are checking a single claim about an alpha factor formula. You may use the tools to compute
+statistics of the factor on the training window before answering (at most 10 tool calls).
+Tools: compute_signal(expr) -> summary stats; corr_with(expr, reference_name) -> mean rank corr;
+       describe(expr) -> distribution, coverage; perturb(expr, field, delta) -> share of signal increases.
+Factor expression: {expression}
+Field glossary: {field_glossary}
+Operator glossary: {operator_glossary}
+Reference signals available to corr_with: {reference_names}
+Claim: "{claim_text}"
+Normalized claim: {predicate}({args})
+
+When you are done, return only JSON: {"verdict": "TRUE"|"FALSE"|"CANT_TELL", "reason": "<one sentence>"}

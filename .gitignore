@@ -1,0 +1,19 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.pytest_cache/
+.hypothesis/
+build/
+dist/
+
+# Raw and processed data are never committed (licensing, §5.10); only MANIFEST/rebuild scripts are.
+data/raw/*
+data/processed/*
+!data/raw/.gitkeep
+!data/processed/.gitkeep
+
+# Run outputs (call logs, caches, verdicts) live outside version control until release.
+runs/
+*.sqlite
+*.sqlite3

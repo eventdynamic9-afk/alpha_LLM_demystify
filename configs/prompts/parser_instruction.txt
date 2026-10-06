@@ -1,0 +1,36 @@
+Split the rationale into atomic claims about the factor. Extract a claim only if its meaning is
+unambiguous from the text; otherwise output it with "ambiguous": true. Do not judge truth.
+Map each claim to one predicate from the list provided (DEPENDS_ON, SIGN, MONO, LOOKBACK, HORIZON,
+XSEC, INVARIANT, RANGE, STRUCT, RESEMBLES, INDEPENDENT, EXPOSED, TURNOVER, REGIME, PRED_SIGN,
+NOVEL, BETTER_THAN, PERF, THEORY, IDENTITY, VARIANT_OF). Copy the exact text span.
+
+Predicate argument conventions:
+- DEPENDS_ON: {"input": <field or out-of-panel input name>}
+- SIGN: {"input": <field or derived quantity such as ret_5d, abn_vol, volatility_20d>, "direction": "+"|"-"}
+- MONO: {"input": ..., "direction": "+"|"-"}
+- LOOKBACK: {"window": <integer trading days>}
+- HORIZON: {"bin": "very_short"|"short"|"medium"|"long"}
+- XSEC: {"value": true|false}
+- INVARIANT: {"transform": "scale", "input": "price"|"volume"}
+- RANGE: {"low": <number>, "high": <number>}
+- STRUCT: {"pattern": <pattern name from the codebook, e.g. "ratio(MA_s, MA_l)">}
+- RESEMBLES / EXPOSED: {"ref": <codebook term or reference signal name>, "sign": "+"|"-"}
+- INDEPENDENT: {"ref": <codebook term or reference signal name>}
+- TURNOVER: {"level": "low"|"high"}
+- REGIME: {"regime": <regime name>, "effect": "stronger"|"weaker"}
+- PRED_SIGN: {"sign": "+"|"-", "horizon": <integer trading days or null>}
+- NOVEL: {"library": "all"}
+- BETTER_THAN: {"ref": <reference signal>, "metric": "IC"}
+- PERF: {"metric": "IC"|"sharpe"|"stability", "level": "high"|"robust"|"stable"}
+- THEORY: {"mechanism": <short label>}
+- IDENTITY: {"library_id": <e.g. alpha101_012, gtja191_005, alpha158_KMID>}
+- VARIANT_OF: {"template": <e.g. RSI, BOLLINGER, STOCHASTIC, WILLIAMS_R, ROC, MA_CROSS, MACD>}
+
+Return only JSON matching this schema:
+{schema}
+
+Rationale id: {rationale_id}
+Rationale:
+<<<
+{rationale_text}
+>>>

@@ -1,0 +1,184 @@
+# Narrator / author / parser / judge roster (§4). DO NOT fix brand names in the plan:
+# pin every entry against its model card ON THE RUN DATE and set `pinned: true`.
+# narrate/roster.py validates the §4.1 criteria and refuses to start a main run if any fails:
+#   >= 2 closed-weight families, >= 2 open-weight families, >= 3 organizations,
+#   >= 3 sizes in one open-weight family, >= 1 reasoning + >= 1 non-reasoning model,
+#   tool calling for every model used at A2, documented training cutoff, data-use terms recorded,
+#   parser/judge families disjoint from narrator families (role separation).
+#
+# Example entries below show the required fields; their model strings are placeholders.
+version: "v2.0-prereg-draft"
+run_date: null              # e.g. 2026-10-20; required for a main run
+
+criteria:
+  min_closed_families: 2
+  min_open_families: 2
+  min_organizations: 3
+  min_sizes_in_ladder: 3
+  require_reasoning: true
+  require_non_reasoning: true
+
+models:
+  # ---------------- open-weight, local (Kaggle 2xT4 / Colab / own GPU) -> exact version control ----
+  - id: open-a-7b
+    family: open_family_a           # e.g. one open-weight family with a size ladder
+    organization: org_a
+    open_weight: true
+    size_b: 7
+    reasoning: false
+    tool_use: true
+    roles: [author, narrator]
+    provider: local
+    base_url: http://localhost:8000/v1          # vLLM / llama.cpp server / Ollama (OpenAI-compatible)
+    api_key_env: null
+    model_string: TO_PIN_ON_RUN_DATE
+    weights_sha256: TO_FILL                      # hash of the weights file actually loaded
+    quantization: TO_FILL                        # e.g. awq-int4, q4_k_m, fp16
+    engine: TO_FILL                              # e.g. vllm, llama.cpp, ollama
+    engine_version: TO_FILL
+    training_cutoff: TO_FILL                     # from the model card
+    cutoff_probe: null                           # filled by narrate/cutoff_probe.py
+    may_train_on_inputs: false                   # local inference: Novel pool allowed
+    pinned: false
+  - id: open-a-14b
+    family: open_family_a
+    organization: org_a
+    open_weight: true
+    size_b: 14
+    reasoning: false
+    tool_use: true
+    roles: [author, narrator]
+    provider: local
+    base_url: http://localhost:8001/v1
+    api_key_env: null
+    model_string: TO_PIN_ON_RUN_DATE
+    weights_sha256: TO_FILL
+    quantization: TO_FILL
+    engine: TO_FILL
+    engine_version: TO_FILL
+    training_cutoff: TO_FILL
+    cutoff_probe: null
+    may_train_on_inputs: false
+    pinned: false
+  - id: open-a-32b
+    family: open_family_a
+    organization: org_a
+    open_weight: true
+    size_b: 32
+    reasoning: true
+    tool_use: true
+    roles: [author, narrator]
+    provider: local
+    base_url: http://localhost:8002/v1
+    api_key_env: null
+    model_string: TO_PIN_ON_RUN_DATE
+    weights_sha256: TO_FILL
+    quantization: TO_FILL
+    engine: TO_FILL
+    engine_version: TO_FILL
+    training_cutoff: TO_FILL
+    cutoff_probe: null
+    may_train_on_inputs: false
+    pinned: false
+  - id: open-b-9b
+    family: open_family_b
+    organization: org_b
+    open_weight: true
+    size_b: 9
+    reasoning: false
+    tool_use: true
+    roles: [author, narrator, cross_narrator]
+    provider: local
+    base_url: http://localhost:8003/v1
+    api_key_env: null
+    model_string: TO_PIN_ON_RUN_DATE
+    weights_sha256: TO_FILL
+    quantization: TO_FILL
+    engine: TO_FILL
+    engine_version: TO_FILL
+    training_cutoff: TO_FILL
+    cutoff_probe: null
+    may_train_on_inputs: false
+    pinned: false
+  # ---------------- closed-weight via free tiers (verify availability and data-use terms) ----------
+  - id: closed-c-flash
+    family: closed_family_c
+    organization: org_c
+    open_weight: false
+    size_b: null
+    reasoning: false
+    tool_use: true
+    roles: [author, narrator]
+    provider: openai_compatible
+    base_url: TO_FILL                            # provider's OpenAI-compatible endpoint
+    api_key_env: CLOSED_C_API_KEY
+    model_string: TO_PIN_ON_RUN_DATE
+    training_cutoff: TO_FILL
+    cutoff_probe: null
+    may_train_on_inputs: TO_FILL                 # if true -> never send the Novel pool (§7.2)
+    pinned: false
+  - id: closed-d
+    family: closed_family_d
+    organization: org_d
+    open_weight: false
+    size_b: null
+    reasoning: true
+    tool_use: true
+    roles: [author, narrator]
+    provider: openai_compatible
+    base_url: TO_FILL
+    api_key_env: CLOSED_D_API_KEY
+    model_string: TO_PIN_ON_RUN_DATE
+    training_cutoff: TO_FILL
+    cutoff_probe: null
+    may_train_on_inputs: TO_FILL
+    pinned: false
+  # ---------------- parser and judges: families not among narrators (role separation) -------------
+  - id: parser-e
+    family: open_family_e
+    organization: org_e
+    open_weight: true
+    size_b: 32
+    reasoning: false
+    tool_use: true
+    roles: [parser]
+    provider: local
+    base_url: http://localhost:8004/v1
+    api_key_env: null
+    model_string: TO_PIN_ON_RUN_DATE
+    weights_sha256: TO_FILL
+    quantization: TO_FILL
+    engine: TO_FILL
+    engine_version: TO_FILL
+    training_cutoff: TO_FILL
+    cutoff_probe: null
+    may_train_on_inputs: false
+    pinned: false
+  - id: judge-f
+    family: open_family_f
+    organization: org_f
+    open_weight: true
+    size_b: 20
+    reasoning: true
+    tool_use: true
+    roles: [judge, parser_secondary]
+    provider: local
+    base_url: http://localhost:8005/v1
+    api_key_env: null
+    model_string: TO_PIN_ON_RUN_DATE
+    weights_sha256: TO_FILL
+    quantization: TO_FILL
+    engine: TO_FILL
+    engine_version: TO_FILL
+    training_cutoff: TO_FILL
+    cutoff_probe: null
+    may_train_on_inputs: false
+    pinned: false
+
+decoding:                     # §8.3
+  temperature_primary: 0.7
+  k_samples: 3
+  temperature_reference: 0.0
+  max_tokens: 700
+  parser_temperature: 0.0
+  judge_temperature: 0.0

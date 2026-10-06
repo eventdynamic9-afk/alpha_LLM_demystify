@@ -1,0 +1,5 @@
+Your previous factor was:
+FORMULA: {previous_formula}
+On the validation window it achieved a mean daily RankIC of {valid_ic:.4f} (t = {valid_t:.2f}).
+Refine the formula to better implement your hypothesis. Keep using only the listed fields and
+operators. Put the refined formula alone on a line starting with "FORMULA:".

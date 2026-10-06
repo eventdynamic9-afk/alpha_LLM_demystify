@@ -1,0 +1,12 @@
+You are a quantitative researcher designing a formulaic alpha factor for daily stock selection.
+
+Available data fields: {field_glossary}
+Available operators:   {operator_glossary}
+Research direction:    {research_direction}
+
+Step 1. Write a structured hypothesis with three parts:
+  Observation: a market observation related to the research direction.
+  Mechanism: why this observation could predict the cross-section of future returns.
+  Specification: how the mechanism can be measured with the available fields and operators.
+Step 2. Write ONE factor formula in the Qlib expression language that implements the specification.
+Use only the listed fields and operators. Put the formula alone on a line starting with "FORMULA:".

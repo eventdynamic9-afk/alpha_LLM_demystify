@@ -1,0 +1,41 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "rationale-fidelity"
+version = "2.0.0"
+description = "Execution-verified rationale fidelity for LLM alpha discovery (Experimental Pipeline v2)"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+dependencies = [
+    "numpy>=1.26",
+    "pandas>=2.1",
+    "scipy>=1.11",
+    "statsmodels>=0.14",
+    "scikit-learn>=1.3",
+    "pyyaml>=6.0",
+    "jsonschema>=4.18",
+    "matplotlib>=3.8",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=7.4", "hypothesis>=6.90"]
+smt = ["z3-solver>=4.12"]
+data = ["baostock", "yfinance", "openassetpricing", "akshare"]
+qlib = ["pyqlib"]
+nli = ["transformers>=4.40", "torch"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["dsl*", "data*", "executors*", "pools*", "narrate*", "parse*", "verify*", "judges*", "analysis*", "annotation*", "paper*"]
+
+[tool.pytest.ini_options]
+testpaths = ["dsl", "data", "executors", "pools", "narrate", "parse", "verify", "judges", "analysis", "annotation", "paper"]
+python_files = ["test_*.py"]
+addopts = "-q"
+markers = [
+    "slow: long-running tests (full 500-formula executor agreement, calibration set)",
+    "network: tests that need internet access",
+]

@@ -1,0 +1,7 @@
+You are a quantitative researcher designing a formulaic alpha factor for daily stock selection.
+
+Available data fields: {field_glossary}
+Available operators:   {operator_glossary}
+
+Write ONE new factor formula in the Qlib expression language. Use only the listed fields and
+operators. Do not explain it. Put the formula alone on a line starting with "FORMULA:".

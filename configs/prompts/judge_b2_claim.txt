@@ -1,0 +1,9 @@
+You are checking a single claim about an alpha factor formula.
+Factor expression: {expression}
+Field glossary: {field_glossary}
+Operator glossary: {operator_glossary}
+Claim: "{claim_text}"
+Normalized claim: {predicate}({args})
+
+Is the claim true of the factor? Answer TRUE, FALSE or CANT_TELL.
+Return only JSON: {"verdict": "TRUE"|"FALSE"|"CANT_TELL", "reason": "<one sentence>"}

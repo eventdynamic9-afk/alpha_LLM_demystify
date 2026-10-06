@@ -1,0 +1,62 @@
+# Offline roster used by the smoke pipeline and the test-suite. "mock" models are deterministic
+# simulators in narrate/clients.py that write rationales from a noisy reading of the formula
+# (with a recall channel for known formulas), so every downstream stage can be exercised without
+# network access. They are never used for results.
+version: "mock"
+run_date: "2026-10-06"
+criteria:
+  min_closed_families: 0
+  min_open_families: 1
+  min_organizations: 1
+  min_sizes_in_ladder: 1
+  require_reasoning: false
+  require_non_reasoning: false
+models:
+  - id: mock-careful
+    family: mock_a
+    organization: mock_org_a
+    open_weight: true
+    size_b: 7
+    reasoning: false
+    tool_use: true
+    roles: [author, narrator]
+    provider: mock
+    model_string: mock-careful-v1
+    mock: {misread_rate: 0.10, recall_rate: 0.20, hallucinate_rate: 0.10}
+    training_cutoff: "2025-12-31"
+    may_train_on_inputs: false
+    pinned: true
+  - id: mock-sloppy
+    family: mock_b
+    organization: mock_org_b
+    open_weight: true
+    size_b: 14
+    reasoning: true
+    tool_use: true
+    roles: [author, narrator, cross_narrator]
+    provider: mock
+    model_string: mock-sloppy-v1
+    mock: {misread_rate: 0.35, recall_rate: 0.60, hallucinate_rate: 0.30}
+    training_cutoff: "2025-12-31"
+    may_train_on_inputs: false
+    pinned: true
+  - id: mock-parser
+    family: mock_p
+    organization: mock_org_p
+    open_weight: true
+    size_b: 32
+    reasoning: false
+    tool_use: true
+    roles: [parser, judge]
+    provider: mock
+    model_string: mock-parser-v1
+    training_cutoff: "2025-12-31"
+    may_train_on_inputs: false
+    pinned: true
+decoding:
+  temperature_primary: 0.7
+  k_samples: 3
+  temperature_reference: 0.0
+  max_tokens: 700
+  parser_temperature: 0.0
+  judge_temperature: 0.0

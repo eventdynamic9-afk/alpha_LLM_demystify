@@ -1,0 +1,33 @@
+(* Typed alpha-factor DSL (§6.1). Canonical surface form = extended Qlib expression language.
+   There is NO negative lag, forward shift or centered window in this grammar (§6.3 layer 1). *)
+
+program     = { assignment , ( ";" | newline ) } , ( assignment | expr ) ;
+assignment  = identifier , "=" , expr ;                       (* named intermediates, SP-ii *)
+expr        = ternary ;
+ternary     = or_expr , [ "?" , expr , ":" , ternary ] ;
+or_expr     = and_expr , { ( "||" | "|" ) , and_expr } ;
+and_expr    = cmp_expr , { ( "&&" | "&" ) , cmp_expr } ;
+cmp_expr    = add_expr , { ( ">" | "<" | ">=" | "<=" | "==" | "!=" ) , add_expr } ;
+add_expr    = mul_expr , { ( "+" | "-" ) , mul_expr } ;
+mul_expr    = unary , { ( "*" | "/" ) , unary } ;
+unary       = ( "-" | "+" | "!" ) , unary | power ;
+power       = primary , [ ( "^" | "**" ) , [ "-" ] , power ] ;  (* exponent must be constant *)
+primary     = number | field | identifier | call | "(" , expr , ")" ;
+field       = "$" , ( "open" | "high" | "low" | "close" | "vwap" | "volume" | "amount" ) ;
+call        = pointwise_call | ts_call | xs_call ;
+pointwise_call = ( "Abs" | "Sign" | "Log" | "Not" ) , "(" , expr , ")"
+               | ( "Greater" | "Less" | "Add" | "Sub" | "Mul" | "Div"
+                 | "Gt" | "Ge" | "Lt" | "Le" | "Eq" | "Ne" | "And" | "Or" ) , "(" , expr , "," , expr , ")"
+               | "If" , "(" , expr , "," , expr , "," , expr , ")"
+               | ( "Power" | "SignedPower" ) , "(" , expr , "," , number , ")" ;
+ts_call     = "Ref" , "(" , expr , "," , lag , ")"                      (* lag  >= 0 *)
+            | "Delta" , "(" , expr , "," , lag1 , ")"                   (* lag1 >= 1 *)
+            | ( "Mean" | "Sum" | "Max" | "Min" | "Med" | "WMA" | "IdxMax" | "IdxMin"
+              | "TsRank" | "Rank" ) , "(" , expr , "," , window , ")"     (* window >= 1 *)
+            | ( "Std" | "Var" | "Slope" | "Rsquare" | "Resi" ) , "(" , expr , "," , window2 , ")"
+            | "Quantile" , "(" , expr , "," , window , "," , level , ")"
+            | ( "Corr" | "Cov" ) , "(" , expr , "," , expr , "," , window2 , ")" ;   (* window2 >= 2 *)
+xs_call     = ( "CSRank" | "CSZScore" ) , "(" , expr , ")"
+            | "CSScale" , "(" , expr , [ "," , number ] , ")" ;
+lag         = integer ;   lag1 = integer ;   window = integer ;   window2 = integer ;
+level       = number ;    (* 0 < q < 1 *)

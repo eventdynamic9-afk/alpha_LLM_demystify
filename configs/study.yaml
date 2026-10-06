@@ -1,0 +1,75 @@
+# Study design constants (§3, §5.2, §7.3, §8). Changes after pre-registration are deviations (Appendix E.7).
+version: "v2.0-prereg-draft"
+seed: 20261006
+
+markets:
+  CN:
+    primary_universe: csi500
+    secondary_universe: csi300
+    calendar: XSHG
+    price_limits: {main: 0.10, star_chinext: 0.20, st: 0.05}
+    vwap_source: native        # Qlib CN bins carry $vwap
+  US:
+    primary_universe: sp500
+    calendar: XNYS
+    vwap_source: hlc3_proxy    # Yahoo has no VWAP: (H+L+C)/3, disclosed (§5.4)
+
+splits:                        # §5.2
+  comparability:               # AlphaAgent / AlphaLogics split (primary)
+    train: ["2015-01-01", "2019-12-31"]
+    valid: ["2020-01-01", "2020-12-31"]
+    test:  ["2021-01-01", "2024-12-31"]
+  long_history_cn:             # Alpha Jungle split (alternative)
+    train: ["2011-01-01", "2020-12-31"]
+    test:  ["2021-01-01", "2024-11-30"]
+  behavioral_truth_window: train       # primary; test window = replication
+  post_cutoff:
+    start: "latest_narrator_cutoff+1m" # resolved from configs/models.yaml at run time
+    end: data_end
+    min_months_confirmatory: 6
+  rolling_robustness_years: [2015, 2024]
+
+labels:                        # §5.2 label convention (stated once)
+  signal_time: close_t         # signal at t uses data up to and including t's close
+  entry: open_t+1              # alternative: close_t
+  horizons: [1, 5, 10, 20]
+
+arms:                          # §3.2 / §7.3 run plan (per narrator model)
+  k_samples: 3
+  temperature_primary: 0.7
+  temperature_reference: 0.0
+  max_words: 250
+  arm_b:
+    base_set: {alpha101: 20, gtja191: 20, alpha158: 20}
+    pools:
+      K:        {formulas: 60, access: [A0]}
+      SP:       {formulas: 60, access: [A0]}
+      N:        {formulas: 60, access: [A0]}
+      SA:       {formulas: 180, access: [A0], types: [sign, window, field]}
+      K_named:  {formulas: 30, access: [A0]}
+      NL:       {formulas: 30, access: [A0]}
+      A2_subset: {formulas: {K: 30, SA_sign: 30}, access: [A2]}
+  arm_a:
+    P1_raw:   {formulas: 60, access: [A0, A1, A2]}
+    P1_mined: {formulas: 60, access: [A0], max_refinement_rounds: 5}
+    P2:       {formulas: 60, access: [A0, A1, A2]}
+    P2_cross: {formulas: 60, access: [A0]}
+    P3:       {formulas: 60, access: [A0, A1, A2], split: {gp: 30, random: 30}}
+    minimal_prompt_subsample: {formulas: 45, access: [A0]}
+  expected_narrations_per_model: 3555
+
+access:
+  A2_max_tool_calls: 10
+  A2_data_window: train
+
+prompt_variants:
+  primary: guided
+  robustness: minimal
+  minimal_fraction: 0.25
+
+research_directions_file: configs/prompts/research_directions.yaml
+
+pilot:                         # §17.1 phase 1
+  models: 3
+  formulas_per_cell: 12
+  double_annotated_rationales: 60

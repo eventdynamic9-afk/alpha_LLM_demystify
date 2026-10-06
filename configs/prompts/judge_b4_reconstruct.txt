@@ -1,0 +1,9 @@
+Below is an explanation of a formulaic alpha factor. Reconstruct the factor formula from the
+explanation alone, in the Qlib expression language.
+Available data fields: {field_glossary}
+Available operators:   {operator_glossary}
+Explanation:
+<<<
+{rationale_text}
+>>>
+Put the formula alone on a line starting with "FORMULA:".

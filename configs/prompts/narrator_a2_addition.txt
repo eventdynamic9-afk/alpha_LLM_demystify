@@ -1,0 +1,3 @@
+Tools: compute_signal(expr) -> summary stats; corr_with(expr, reference_name) -> mean rank corr;
+       describe(expr) -> distribution, coverage; perturb(expr, field, delta) -> share of signal increases.
+Data: training window only. At most 10 tool calls.

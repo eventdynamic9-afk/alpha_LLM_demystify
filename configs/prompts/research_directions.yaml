@@ -1,0 +1,22 @@
+# 20 fixed research directions for P1 hypothesis-first authoring (§7.1)
+directions:
+  - liquidity shocks
+  - intraday buying pressure
+  - volatility-scaled trend
+  - overnight versus intraday return gap
+  - volume-confirmed price moves
+  - short-term overreaction
+  - daily range expansion and contraction
+  - lottery-like extreme returns
+  - distance from recent highs and lows
+  - price-volume divergence
+  - volatility regime shifts
+  - trading activity acceleration
+  - opening gap behaviour
+  - close location within the daily range
+  - trend persistence
+  - mean reversion after volume spikes
+  - dispersion of daily returns
+  - illiquidity premium dynamics
+  - VWAP deviation
+  - smoothness of the price path

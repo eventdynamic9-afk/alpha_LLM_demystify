@@ -1,0 +1,6 @@
+Data fields: {field_glossary}
+Operators:   {operator_glossary}
+Factor:      {formula_surface_form}
+{optional_label_line}
+
+Explain the rationale of this alpha factor.
