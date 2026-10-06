@@ -3,6 +3,10 @@
 Builds the exact messages for access levels A0 / A1 / A2 and prompt variants guided / minimal from the
 frozen templates in ``configs/prompts``.  Glossary and field order are randomized per narration
 (§8.4); no condition labels, pool names or the word "perturbed" ever appear in prompts.
+
+§14 ablation variants (secondary, exploratory; never in the primary analysis): ``structured`` (claims as
+bullet facts), ``cap150`` (150-word cap in the system prompt) and ``guided_effort_<level>`` (guided
+prompt at a non-default reasoning effort; the effort itself is a request parameter, see the runner).
 """
 from __future__ import annotations
 
@@ -15,6 +19,25 @@ from dsl.operators import OPS, operator_glossary
 from dsl.serialize import anonymize_legend
 
 ALL_FIELDS = ("open", "high", "low", "close", "vwap", "volume", "amount")
+# prompt variant -> (system template, user template); guided / minimal are the frozen Appendix A templates
+VARIANTS = {"guided": ("narrator_system", "narrator_a0_guided"),
+            "minimal": ("narrator_system", "narrator_a0_minimal"),
+            "structured": ("narrator_system", "narrator_a0_structured"),
+            "cap150": ("narrator_system_cap150", "narrator_a0_guided")}
+EFFORT_TAG = "_effort_"
+
+
+def split_variant(variant: str) -> tuple[str, str | None]:
+    """``guided_effort_high`` -> (``guided``, ``high``); plain variants -> (variant, None)."""
+    base, _, effort = variant.partition(EFFORT_TAG)
+    return base, (effort or None)
+
+
+def variant_templates(variant: str) -> tuple[str, str]:
+    base, _ = split_variant(variant)
+    if base not in VARIANTS:
+        raise ValueError(f"unknown prompt variant {variant!r}; expected one of {sorted(VARIANTS)}")
+    return VARIANTS[base]
 
 
 def _ops_in(node) -> list[str]:
@@ -60,8 +83,9 @@ def build_messages(record: dict, access: str = "A0", variant: str = "guided", ma
                    seed: int = 0, diagnostics: str | None = None, train_window: str | None = None) -> tuple[list[dict], dict]:
     """Return (messages, meta) — meta carries template hashes for the call log."""
     rng = random.Random(seed)
-    system = prompt("narrator_system")
-    tmpl = prompt("narrator_a0_guided" if variant == "guided" else "narrator_a0_minimal")
+    sys_name, user_name = variant_templates(variant)
+    system = prompt(sys_name)
+    tmpl = prompt(user_name)
     label = record.get("label") or ""
     user = fill(tmpl, field_glossary=field_glossary_for(record, market, rng),
                 operator_glossary=operator_glossary_for(record, rng),
@@ -87,4 +111,5 @@ def legend_for_all_fields(node, seed: int) -> dict:
     return anonymize_legend(node, seed, all_fields=True)
 
 
-__all__ = ["build_messages", "field_glossary_for", "operator_glossary_for", "legend_for_all_fields", "OPS"]
+__all__ = ["build_messages", "field_glossary_for", "operator_glossary_for", "legend_for_all_fields", "OPS", "VARIANTS",
+           "split_variant", "variant_templates"]

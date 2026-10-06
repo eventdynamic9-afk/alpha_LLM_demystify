@@ -1,10 +1,14 @@
 """Narration CLI.
 
     python -m narrate check-roster [--models configs/models.yaml] [--pilot]
-    python -m narrate plan --formulas runs/main/formulas.jsonl [--models ...] [--reference-t0]
+    python -m narrate plan --formulas runs/main/formulas.jsonl [--models ...] [--no-reference-t0] \
+        [--ablation structured --ablation cap150 --ablation reasoning_effort]
     python -m narrate run --formulas runs/main/formulas.jsonl --panel data/processed/cn_csi500.npz \
-        --run-dir runs/main [--models configs/models.yaml] [--limit N]
+        --run-dir runs/main [--models configs/models.yaml] [--limit N] [--no-reference-t0] [--ablation ...]
     python -m narrate probe --model-id X --bank probes.yaml
+
+The main plan includes the §8.3 T = 0 reference sample by default; §14 ablation cells are opt-in.  A main
+plan in which some P2 formula lacks exactly one cross-narrator (§4.2) is reported and refused by ``run``.
 """
 from __future__ import annotations
 
@@ -22,10 +26,20 @@ def main(argv=None) -> int:
     c = sub.add_parser("check-roster")
     c.add_argument("--models", default="models.yaml")
     c.add_argument("--pilot", action="store_true")
+    from .plan import ABLATIONS
+
+    def plan_args(x):
+        x.add_argument("--reference-t0", dest="reference_t0", action="store_true", default=True,
+                       help=argparse.SUPPRESS)                       # default since §8.3; kept for old scripts
+        x.add_argument("--no-reference-t0", dest="reference_t0", action="store_false",
+                       help="omit the §8.3 T = 0 reference sample (main plan)")
+        x.add_argument("--ablation", action="append", choices=ABLATIONS, default=[],
+                       help="add §14 ablation cells (repeatable; secondary, exploratory)")
+
     p = sub.add_parser("plan")
     p.add_argument("--formulas", required=True)
     p.add_argument("--models", default="models.yaml")
-    p.add_argument("--reference-t0", action="store_true")
+    plan_args(p)
     p.add_argument("--pilot", action="store_true")
     p.add_argument("--pilot-n", type=int)
     p.add_argument("--k", type=int)
@@ -36,7 +50,7 @@ def main(argv=None) -> int:
     r.add_argument("--models", default="models.yaml")
     r.add_argument("--limit", type=int)
     r.add_argument("--k", type=int)
-    r.add_argument("--reference-t0", action="store_true")
+    plan_args(r)
     r.add_argument("--pilot", action="store_true", help="§17.1 pilot plan instead of the main plan")
     r.add_argument("--pilot-n", type=int)
     r.add_argument("--windows")
@@ -65,10 +79,18 @@ def main(argv=None) -> int:
         from .roster import novel_pool_allowed, with_role
 
         cfg = load_models(a.models)
-        cells = plan_cells(read_jsonl(a.formulas), with_role(cfg, "narrator"), reference_t0=a.reference_t0,
-                           novel_allowed=novel_pool_allowed)
-        print(json.dumps(plan_summary(cells), indent=1))
-        return 0
+        recs = read_jsonl(a.formulas)
+        if a.pilot:
+            from .plan import plan_pilot_cells
+
+            cells = plan_pilot_cells(recs, with_role(cfg, "narrator"), a.pilot_n, a.k, novel_allowed=novel_pool_allowed)
+            summ = plan_summary(cells)
+        else:
+            cells = plan_cells(recs, with_role(cfg, "narrator"), k=a.k, reference_t0=a.reference_t0,
+                               novel_allowed=novel_pool_allowed, ablations=tuple(a.ablation))
+            summ = plan_summary(cells, recs)
+        print(json.dumps(summ, indent=1))
+        return 0 if a.pilot or summ["p2_cross_narration"]["ok"] else 1
     if a.cmd == "run":
         from pools.records import read_jsonl
         from verify.__main__ import _ctx
@@ -85,8 +107,14 @@ def main(argv=None) -> int:
 
             cells = plan_pilot_cells(recs, with_role(cfg, "narrator"), a.pilot_n, a.k, novel_allowed=novel_pool_allowed)
         else:
+            from .plan import cross_narration_check
+
             cells = plan_cells(recs, with_role(cfg, "narrator"), k=a.k, reference_t0=a.reference_t0,
-                               novel_allowed=novel_pool_allowed)
+                               novel_allowed=novel_pool_allowed, ablations=tuple(a.ablation))
+            chk = cross_narration_check(cells, recs)
+            if not chk["ok"]:
+                print(f"refusing: P2 cross-narration invariant violated (§4.2): {json.dumps(chk)}", file=sys.stderr)
+                return 2
         if a.limit:
             cells = cells[: a.limit]
         runner = NarrationRunner(cfg, {x["formula_id"]: x for x in recs}, a.run_dir, ctx, ctx.panel.market)

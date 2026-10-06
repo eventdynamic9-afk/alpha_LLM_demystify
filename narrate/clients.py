@@ -33,6 +33,12 @@ class LLMResponse:
     model: str = ""
     finish_reason: str | None = None
     raw: dict | None = None
+    reasoning: str | None = None                       # reasoning text when the endpoint exposes it (§4.3)
+    params: dict = field(default_factory=dict)         # request parameters actually sent (minus messages/tools)
+
+
+PROVENANCE_FIELDS = ("provider", "model_string", "base_url", "weights_sha256", "quantization", "engine",
+                     "engine_version", "agent_tier", "training_cutoff")
 
 
 class LLMClient:
@@ -41,9 +47,17 @@ class LLMClient:
         self.model_id = cfg["id"]
         self.model_string = cfg.get("model_string", cfg["id"])
         self.family = cfg.get("family", "")
+        # §8.3: reasoning models run at their default reasoning setting, recorded with every call
+        self.reasoning_setting = cfg.get("reasoning_setting") or ("default" if cfg.get("reasoning") else None)
+
+    def provenance(self) -> dict:
+        """Per-model version pinning fields (§4.1) written into every call record."""
+        return {"model_id": self.model_id, **{k: self.cfg.get(k) for k in PROVENANCE_FIELDS if k in self.cfg},
+                "reasoning_setting": self.reasoning_setting}
 
     def complete(self, messages: list[dict], tools: list | None = None, temperature: float = 0.7,
-                 max_tokens: int = 700, seed: int | None = None) -> LLMResponse:  # pragma: no cover
+                 max_tokens: int = 700, seed: int | None = None, tool_choice: str | None = None,
+                 reasoning_effort: str | None = None) -> LLMResponse:  # pragma: no cover
         raise NotImplementedError
 
 
@@ -56,14 +70,18 @@ class OpenAICompatibleClient(LLMClient):
         self.timeout = int(cfg.get("timeout", 300))
         self.retries = int(cfg.get("retries", 4))
 
-    def complete(self, messages, tools=None, temperature=0.7, max_tokens=700, seed=None) -> LLMResponse:
+    def complete(self, messages, tools=None, temperature=0.7, max_tokens=700, seed=None, tool_choice=None,
+                 reasoning_effort=None) -> LLMResponse:
         body = {"model": self.model_string, "messages": messages, "temperature": temperature,
                 "max_tokens": max_tokens}
         if seed is not None:
             body["seed"] = seed
         if tools:
             body["tools"] = tools
-            body["tool_choice"] = "auto"
+            body["tool_choice"] = tool_choice or "auto"
+        effort = reasoning_effort or (self.reasoning_setting if self.reasoning_setting not in (None, "default") else None)
+        if effort:                                    # §14 reasoning-effort ablation / a non-default pinned setting
+            body[self.cfg.get("reasoning_effort_key", "reasoning_effort")] = effort
         body.update(self.cfg.get("extra_body", {}))
         req = urllib.request.Request(f"{self.base_url}/chat/completions", data=json.dumps(body).encode(),
                                      headers={"Content-Type": "application/json",
@@ -91,11 +109,14 @@ class OpenAICompatibleClient(LLMClient):
                 args = {"_raw": fn.get("arguments")}
             calls.append({"id": tc.get("id"), "name": fn.get("name"), "arguments": args})
         usage = data.get("usage") or {}
+        reasoning = msg.get("reasoning_content") or msg.get("reasoning")
         return LLMResponse(msg.get("content") or "", calls,
                            {"in": usage.get("prompt_tokens"), "out": usage.get("completion_tokens"),
                             "reasoning": (usage.get("completion_tokens_details") or {}).get("reasoning_tokens")},
                            time.time() - t0, data.get("system_fingerprint"), data.get("model", self.model_string),
-                           ch.get("finish_reason"), data)
+                           ch.get("finish_reason"), data, reasoning if isinstance(reasoning, str) else
+                           (json.dumps(reasoning) if reasoning else None),
+                           {k: v for k, v in body.items() if k not in ("messages", "tools")})
 
 
 class RelayClient(LLMClient):
@@ -107,20 +128,27 @@ class RelayClient(LLMClient):
         super().__init__(cfg)
         self.relay = Relay(os.environ.get("RELAY_DIR") or cfg.get("relay_dir") or "runs/relay")
 
-    def complete(self, messages, tools=None, temperature=0.7, max_tokens=700, seed=None) -> LLMResponse:
+    def complete(self, messages, tools=None, temperature=0.7, max_tokens=700, seed=None, tool_choice=None,
+                 reasoning_effort=None) -> LLMResponse:
         from .relay import PendingResponse, parse_reply, request_key
 
+        if tool_choice == "none":                     # final turn with tools disabled: no tool protocol shown
+            tools = None
         key = request_key(self.model_id, messages, tools, temperature, max_tokens, seed)
+        if reasoning_effort:                          # keeps effort-ablation requests distinct from primary ones
+            key = request_key(self.model_id, messages, tools, temperature, max_tokens,
+                              f"{seed}|reasoning_effort={reasoning_effort}")
+        params = {"temperature": temperature, "seed": seed, "max_tokens": max_tokens, "has_tools": bool(tools)}
+        params.update({k: v for k, v in (("tool_choice", tool_choice), ("reasoning_effort", reasoning_effort)) if v})
         reply = self.relay.response(key)
         if reply is None:
             path = self.relay.write_request(key, messages, tools,
-                                            {"model": self.model_id, "agent_tier": self.cfg.get("agent_tier"),
-                                             "temperature": temperature, "seed": seed, "max_tokens": max_tokens,
-                                             "has_tools": bool(tools)}, max_tokens)
+                                            {"model": self.model_id, "agent_tier": self.cfg.get("agent_tier"), **params},
+                                            max_tokens)
             raise PendingResponse(key, path)
         text, calls = parse_reply(reply) if tools else (reply.strip(), [])
         return LLMResponse(text, calls, {"in": None, "out": len(reply.split())}, 0.0, key, self.model_string,
-                           "tool_calls" if calls else "stop")
+                           "tool_calls" if calls else "stop", params=params)
 
 
 # =============================================================================== mock simulator
@@ -155,7 +183,8 @@ class MockClient(LLMClient):
         self._skeletons = None
 
     # ------------------------------------------------------------------ dispatch on prompt type
-    def complete(self, messages, tools=None, temperature=0.7, max_tokens=700, seed=None) -> LLMResponse:
+    def complete(self, messages, tools=None, temperature=0.7, max_tokens=700, seed=None, tool_choice=None,
+                 reasoning_effort=None) -> LLMResponse:
         prompt = "\n".join(m.get("content") or "" for m in messages if m["role"] in ("system", "user"))
         h = int(hashlib.sha256((self.model_id + prompt + str(seed) + str(temperature)).encode()).hexdigest()[:12], 16)
         rng = random.Random(h)
@@ -173,7 +202,10 @@ class MockClient(LLMClient):
         else:
             text = self._narrate(prompt, rng)
         return LLMResponse(text, [], {"in": len(prompt) // 4, "out": len(text) // 4}, time.time() - t0,
-                           f"mock-{self.model_id}", self.model_string, "stop")
+                           f"mock-{self.model_id}", self.model_string, "stop",
+                           params={"temperature": temperature, "max_tokens": max_tokens, "seed": seed,
+                                   "tool_choice": tool_choice or ("auto" if tools else None),
+                                   "reasoning_effort": reasoning_effort})
 
     # ------------------------------------------------------------------ narration
     def _recall_base(self, node):

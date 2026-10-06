@@ -2,12 +2,12 @@
 
 Claims extracted by both LLM parsers (same normalized predicate, overlapping spans) are accepted; a
 claim found by only one parser is accepted when the rule layer corroborates it, otherwise it is
-queued for human adjudication.  The first-run configuration (E2 + rules for slots + human sample)
+queued for human adjudication.  The first-run configuration (E2 + E1 slot filling + human sample)
 uses :func:`merge_parser_and_rules`.
 """
 from __future__ import annotations
 
-from .normalize import normalize_claim, predicate_key
+from .normalize import match_key, normalize_claim, predicate_key
 from .rules import extract_claims
 
 
@@ -47,13 +47,25 @@ def ensemble(claims_a: list[dict], claims_b: list[dict], text: str, rationale_id
     return {"accepted": accepted, "adjudicate": adjudicate}
 
 
-def merge_parser_and_rules(llm_claims: list[dict], text: str, rationale_id: str) -> list[dict]:
-    """First-run E2 + E1: keep every LLM claim; add rule-layer identity/lookback claims the LLM missed
-    (deterministic, high-precision C1.1 / C1.4 / C6 patterns)."""
+def merge_parser_and_rules(llm_claims: list[dict], text: str, rationale_id: str,
+                           add_rule_claims: bool = False) -> list[dict]:
+    """First-run configuration (§9.2 "E2 + E1 for slot filling"): the LLM claims, whose slots the rule
+    layer already filled in :func:`parse.llm_parser.llm_parse`, renumbered.
+
+    ``add_rule_claims=True`` (opt-in, beyond the first-run spec) also adds rule-layer IDENTITY / LOOKBACK /
+    DEPENDS_ON claims that no LLM claim states: deduplicated by predicate key within the same sentence,
+    or anywhere when the LLM claim's span could not be located."""
     out = list(llm_claims)
-    for r in (normalize_claim(c) for c in extract_claims(text, rationale_id)):
-        if r["predicate"] in ("IDENTITY", "LOOKBACK", "DEPENDS_ON") and _match(r, out) is None:
-            out.append({**r, "parser": "rules"})
+    if add_rule_claims:
+        for r in (normalize_claim(c) for c in extract_claims(text, rationale_id)):
+            if r["predicate"] not in ("IDENTITY", "LOOKBACK", "DEPENDS_ON"):
+                continue
+            dup = any(match_key(r) == match_key(c) and (spans_overlap(r["span"], c["span"])
+                                                        or c.get("span_source") == "unlocated"
+                                                        or list(c.get("span") or [0, 0]) == [0, 0])
+                      for c in out)
+            if not dup:
+                out.append({**r, "parser": "rules"})
     for k, c in enumerate(out):
         c["claim_id"] = f"{rationale_id}-c{k}"
     return out

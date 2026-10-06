@@ -7,6 +7,7 @@ frozen LLM parser (E2) is primary and this layer fills slots (hedge, polarity, s
 """
 from __future__ import annotations
 
+import functools
 import re
 
 from configs import codebook
@@ -15,6 +16,9 @@ from .normalize import TYPE_OF, horizon_bin_of_days
 
 _SENT = re.compile(r"[^.!?\n]+(?:[.!?]+|$)")
 _NEG = re.compile(r"\b(not|no|never|doesn't|does not|isn't|is not|cannot|can't|without|lacks?)\b", re.I)
+
+HEDGES = ("absolute", "typical", "possible")
+POLARITIES = ("affirm", "deny")
 
 _DIR_UP = r"(raises|increases|boosts|lifts|pushes up|higher|larger|greater|more positive|scores? higher)"
 _DIR_DOWN = r"(lowers|decreases|reduces|depresses|pushes down|lower|smaller|more negative|scores? lower)"
@@ -82,14 +86,63 @@ def _days(s: str) -> int | None:
     return None
 
 
-def _term(s: str) -> tuple[str, str] | None:
-    """Longest codebook term mentioned in the sentence -> (term, sign)."""
+_QUAL_NEG = {"low", "lower", "less", "reduced", "negative", "anti", "small", "smaller", "weak", "weaker", "minimal"}
+_TERM_SEP = r"[\s\-\u2010\u2011\u2013]+"
+
+
+@functools.lru_cache(maxsize=1)
+def _term_patterns() -> list[tuple[str, re.Pattern]]:
+    terms = codebook()["terms"]
+    out = []
+    for t in sorted(terms, key=len, reverse=True):
+        body = _TERM_SEP.join(re.escape(w) for w in re.split(r"[\s\-]+", t))
+        out.append((t, re.compile(rf"(?<![\w\-]){body}(?!\w)(?!-(?!(?:like|type|style)\b))")))
+    return out
+
+
+def _term(s: str) -> tuple[str, str, bool] | None:
+    """Longest codebook term mentioned in the sentence -> (term, sign, ambiguous).
+
+    Hyphens and spaces are interchangeable ("low-volatility" = "low volatility") but a term never matches
+    inside a hyphenated compound ("volatility" in "high-volatility"; "-like/-type/-style" suffixes allowed).  A term qualified by a negating
+    word that is not itself a codebook term ("less momentum") is AMBIGUOUS (§9.5); comparatives of a
+    term's own qualifier ("lower volatility") map to that term."""
     low = s.lower()
     terms = codebook()["terms"]
-    for t in sorted(terms, key=len, reverse=True):
-        if re.search(rf"\b{re.escape(t)}\b", low):
-            return t, "+"
+    for t, pat in _term_patterns():
+        m = pat.search(low)
+        if not m:
+            continue
+        prev = re.search(r"([a-z]+)\s+$", low[:m.start()])
+        if prev and prev.group(1) in _QUAL_NEG and t.split()[0] not in _QUAL_NEG:
+            for q in ("low", "small"):
+                if f"{q} {t}" in terms:
+                    return f"{q} {t}", "+", False
+            return t, "+", True
+        return t, "+", False
     return None
+
+
+_LIB_NAME_NUMBERS = {"101", "158", "191"}
+
+
+def _identity_ok(lib: str, m: re.Match) -> bool:
+    """Precision guard for C6 cues: a library's own name ("Alpha158", "Alpha 101", "GTJA 191") is never read
+    as a formula number, and an Alpha101 number needs '#', 'alpha101' or 'WorldQuant' in the cue."""
+    tok = m.group(1)
+    if not tok.isdigit():
+        return True
+    g = m.group(0).lower()
+    pre = g[: m.start(1) - m.start(0)]
+    if tok in _LIB_NAME_NUMBERS and re.search(r"(alpha|gtja|junan)\s*$", pre):
+        return False
+    if lib == "alpha101":
+        return "#" in pre or "worldquant" in pre or "alpha101" in pre
+    return True
+
+
+def _num(x: str) -> float:
+    return float(x.replace("\u2212", "-").replace("\u2013", "-"))
 
 
 def _claim(rid, k, start, end, text, predicate, args, s, cue=None, ambiguous=False, horizon=None):
@@ -115,6 +168,8 @@ def extract_claims(text: str, rationale_id: str = "r") -> list[dict]:
         for lib, pats in cb["identity_patterns"].items():
             for pat in pats:
                 for m in re.finditer(pat, s, re.I):
+                    if not _identity_ok(lib, m):
+                        continue
                     tok = m.group(1)
                     lid = f"{lib}_{int(tok):03d}" if tok.isdigit() else f"{lib}_{tok.upper()}"
                     add(start, end, s, "IDENTITY", {"library_id": lid}, s, m.group(0))
@@ -184,9 +239,10 @@ def extract_claims(text: str, rationale_id: str = "r") -> list[dict]:
             add(start, end, s, "XSEC", {"value": False}, s)
         if re.search(r"\b(scale-free|unit-?less|scale invariant|scale-invariant|dimensionless|independent of the price level)\b", low):
             add(start, end, s, "INVARIANT", {"transform": "scale", "input": "price"}, s)
-        m = re.search(r"\b(?:bounded|ranges?|lies|between)\b[^0-9\-]*(-?\d+(?:\.\d+)?)\s*(?:and|to)\s*(-?\d+(?:\.\d+)?)", low)
+        m = re.search(r"\b(?:bounded|ranges?|lies|between)\b[^0-9\-\u2212\u2013]*([-\u2212\u2013]?\d+(?:\.\d+)?)\s*"
+                      r"(?:and|to)\s*([-\u2212\u2013]?\d+(?:\.\d+)?)", low)
         if m:
-            add(start, end, s, "RANGE", {"low": float(m.group(1)), "high": float(m.group(2))}, s, m.group(0))
+            add(start, end, s, "RANGE", {"low": _num(m.group(1)), "high": _num(m.group(2))}, s, m.group(0))
         if re.search(r"ratio of (a |the )?short[- a-z]* to (a |the )?long[- a-z]* (moving )?average", low):
             add(start, end, s, "STRUCT", {"pattern": "ratio(MA_s, MA_l)"}, s)
         if re.search(r"\bz-?score\b", low):
@@ -198,12 +254,12 @@ def extract_claims(text: str, rationale_id: str = "r") -> list[dict]:
         # ---------------- C2 behavioral
         t = _term(s)
         if re.search(r"\b(independent of|uncorrelated with|orthogonal to|unrelated to)\b", low) and t:
-            add(start, end, s, "INDEPENDENT", {"ref": t[0]}, s)
+            add(start, end, s, "INDEPENDENT", {"ref": t[0]}, s, ambiguous=t[2])
             t = None
         if t and re.search(r"\b(tilt|exposure|loads? on|loading)\b", low):
-            add(start, end, s, "EXPOSED", {"ref": t[0], "sign": "+"}, s)
+            add(start, end, s, "EXPOSED", {"ref": t[0], "sign": "+"}, s, ambiguous=t[2])
         elif t and re.search(r"\b(captur|resembl|similar|proxy|reflect|akin|form of|version of|variant of|like|measures|is a)\w*", low):
-            add(start, end, s, "RESEMBLES", {"ref": t[0], "sign": t[1]}, s, t[0])
+            add(start, end, s, "RESEMBLES", {"ref": t[0], "sign": t[1]}, s, t[0], ambiguous=t[2])
         if re.search(r"\b(low turnover|slow-moving|slow moving|persistent|stable rankings)\b", low):
             add(start, end, s, "TURNOVER", {"level": "low"}, s)
         elif re.search(r"\b(high turnover|fast-moving|fast moving|rapidly changing)\b", low):
@@ -239,7 +295,7 @@ def extract_claims(text: str, rationale_id: str = "r") -> list[dict]:
         if m and t is None:
             tt = _term(s[m.end():])
             if tt:
-                add(start, end, s, "BETTER_THAN", {"ref": tt[0], "metric": "IC"}, s, m.group(0))
+                add(start, end, s, "BETTER_THAN", {"ref": tt[0], "metric": "IC"}, s, m.group(0), ambiguous=tt[2])
         if re.search(r"\b(high ic|strong predictive power|statistically significant|significant alpha|robust (performance|predictive))\b", low):
             add(start, end, s, "PERF", {"metric": "IC", "level": "high"}, s)
         if re.search(r"\b(stable across (years|time|periods)|consistent over time)\b", low):
@@ -250,14 +306,21 @@ def extract_claims(text: str, rationale_id: str = "r") -> list[dict]:
 
 
 def fill_slots(claim: dict, text: str) -> dict:
-    """Fill missing hedge / polarity / scope / horizon slots from the claim's span (E1 slot layer)."""
-    s0, s1 = claim.get("span", [0, 0])
-    s = text[s0:s1] if 0 <= s0 < s1 <= len(text) else claim.get("text", "")
-    claim.setdefault("hedge", slot_hedge(s))
-    claim.setdefault("polarity", slot_polarity(s))
+    """Fill missing hedge / polarity / scope / horizon slots from the claim's span (E1 slot layer).
+
+    A slot is filled when it is absent, null or not a codebook value; values the parser supplied are kept."""
+    s0, s1 = claim.get("span") or [0, 0]
+    s = text[s0:s1] if isinstance(s0, int) and isinstance(s1, int) and 0 <= s0 < s1 <= len(text) else claim.get("text", "")
+    if claim.get("hedge") not in HEDGES:
+        claim["hedge"] = slot_hedge(s)
+    if claim.get("polarity") not in POLARITIES:
+        claim["polarity"] = slot_polarity(s)
     if claim.get("scope") is None:
         claim["scope"] = slot_scope(s)
     if claim.get("horizon") is None and claim.get("predicate") == "PRED_SIGN":
         d = (claim.get("args") or {}).get("horizon")
-        claim["horizon"] = horizon_bin_of_days(int(d)) if d else None
+        try:
+            claim["horizon"] = horizon_bin_of_days(int(d)) if d not in (None, "", "null") else None
+        except (TypeError, ValueError):
+            claim["horizon"] = None
     return claim

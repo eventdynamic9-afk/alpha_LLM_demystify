@@ -38,6 +38,7 @@ arms:                          # §3.2 / §7.3 run plan (per narrator model)
   k_samples: 3
   temperature_primary: 0.7
   temperature_reference: 0.0
+  reference_t0: true           # §8.3: one T = 0 reference sample per (formula, condition), sample_idx = -1
   max_words: 250
   arm_b:
     base_set: {alpha101: 20, gtja191: 20, alpha158: 20}
@@ -66,6 +67,12 @@ prompt_variants:
   primary: guided
   robustness: minimal
   minimal_fraction: 0.25
+
+ablations:                     # §14 (secondary, exploratory): opt-in plan cells, never in the primary analysis
+  fraction: 0.25               # Latin-square-rotated quarter of each model's Arm-A formulas (P1-raw, P2, P3), A0, k samples
+  structured: {variant: structured, user_template: narrator_a0_structured}   # "list your claims as bullet facts"
+  cap150: {variant: cap150, system_template: narrator_system_cap150, max_words: 150}
+  reasoning_effort: {variant: "guided_effort_<level>", levels: [low, high]}  # narrators listing reasoning_effort_levels
 
 research_directions_file: configs/prompts/research_directions.yaml
 

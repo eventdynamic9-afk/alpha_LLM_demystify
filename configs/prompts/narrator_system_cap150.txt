@@ -1,0 +1,2 @@
+You are a quantitative researcher. You will be shown an alpha factor defined as a formula over daily
+stock data. Write a concise rationale (at most 150 words) for this factor.

@@ -5,6 +5,9 @@
 #   >= 3 sizes in one open-weight family, >= 1 reasoning + >= 1 non-reasoning model,
 #   tool calling for every model used at A2, documented training cutoff, data-use terms recorded,
 #   parser/judge families disjoint from narrator families (role separation).
+# Reasoning models (§8.3) run at their default reasoning setting, recorded per call: `reasoning_setting`
+# (default | low | medium | high ...); `reasoning_effort_levels` lists the levels the endpoint exposes for
+# the §14 reasoning-effort ablation (null = not configurable; `reasoning_effort_key` = request field name).
 #
 # Example entries below show the required fields; their model strings are placeholders.
 version: "v2.0-prereg-draft"
@@ -66,6 +69,8 @@ models:
     open_weight: true
     size_b: 32
     reasoning: true
+    reasoning_setting: default                   # §8.3 recorded with every call
+    reasoning_effort_levels: null                # e.g. [low, high] if the endpoint exposes it (§14 ablation)
     tool_use: true
     roles: [author, narrator]
     provider: local
@@ -123,6 +128,8 @@ models:
     open_weight: false
     size_b: null
     reasoning: true
+    reasoning_setting: default                   # §8.3 recorded with every call
+    reasoning_effort_levels: null                # e.g. [low, high] if the endpoint exposes it (§14 ablation)
     tool_use: true
     roles: [author, narrator]
     provider: openai_compatible
@@ -160,6 +167,8 @@ models:
     open_weight: true
     size_b: 20
     reasoning: true
+    reasoning_setting: default                   # §8.3 recorded with every call
+    reasoning_effort_levels: null                # e.g. [low, high] if the endpoint exposes it (§14 ablation)
     tool_use: true
     roles: [judge, parser_secondary]
     provider: local

@@ -1,9 +1,10 @@
 """Parser validation against human gold extractions (§9.3).
 
 Matching rule: an extracted claim matches a gold claim iff their normalized predicates are equal and
-their spans overlap.  Reports extraction precision / recall / F1 by claim type, type accuracy and slot
-accuracy, and the go/no-go decision (F1 >= 0.80 for C1/C6 and >= 0.70 for C2/C3, plus agreement at or
-above the tentative threshold).
+their spans overlap; polarity is a slot (§9.1), not part of the predicate, so it is scored with the other
+slots.  Reports extraction precision / recall / F1 by claim type, type accuracy and slot accuracy, and
+the go/no-go decision (F1 >= 0.80 for C1/C6 and >= 0.70 for C2/C3, AND inter-annotator agreement at or
+above the tentative threshold — a missing agreement value is a no-go).
 """
 from __future__ import annotations
 
@@ -12,10 +13,10 @@ from collections import defaultdict
 from configs import thresholds
 
 from .ensemble import spans_overlap
-from .normalize import normalize_claim, predicate_key
+from .normalize import match_key, normalize_claim
 
 
-def _match_pairs(pred: list[dict], gold: list[dict], key=predicate_key):
+def _match_pairs(pred: list[dict], gold: list[dict], key=match_key):
     used = set()
     pairs = []
     for i, p in enumerate(pred):
@@ -67,6 +68,7 @@ def extraction_metrics(pred_by_rid: dict[str, list[dict]], gold_by_rid: dict[str
 
 
 def go_no_go(metrics: dict, agreement_alpha: float | None = None) -> dict:
+    """§9.3 decision: both F1 conditions and Krippendorff's alpha >= the tentative threshold are required."""
     cfg = thresholds()["parser_go_no_go"]
     reasons = []
 
@@ -80,6 +82,9 @@ def go_no_go(metrics: dict, agreement_alpha: float | None = None) -> dict:
         reasons.append(f"F1(C1/C6) = {f_c1c6:.3f} < {cfg['f1_c1_c6']}")
     if not (f_c2c3 >= cfg["f1_c2_c3"]):
         reasons.append(f"F1(C2/C3) = {f_c2c3:.3f} < {cfg['f1_c2_c3']}")
-    if agreement_alpha is not None and agreement_alpha < cfg["alpha_tentative"]:
+    if agreement_alpha is None or agreement_alpha != agreement_alpha:
+        reasons.append("inter-annotator agreement (Krippendorff alpha) not supplied: the §9.3 gate needs it")
+    elif agreement_alpha < cfg["alpha_tentative"]:
         reasons.append(f"Krippendorff alpha = {agreement_alpha:.3f} < {cfg['alpha_tentative']}")
-    return {"go": not reasons, "reasons": reasons, "f1_c1_c6": f_c1c6, "f1_c2_c3": f_c2c3}
+    return {"go": not reasons, "reasons": reasons, "f1_c1_c6": f_c1c6, "f1_c2_c3": f_c2c3,
+            "krippendorff_alpha": agreement_alpha}

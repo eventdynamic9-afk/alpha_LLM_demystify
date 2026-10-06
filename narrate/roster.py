@@ -44,6 +44,8 @@ def validate_roster(cfg: dict | None = None, main_run: bool = True) -> RosterRep
     for m in narr:
         if not m.get("tool_use"):
             probs.append(f"{m['id']}: no tool calling (cannot be used at A2)")
+        if main_run and m.get("reasoning") and not m.get("reasoning_setting"):
+            probs.append(f"{m['id']}: reasoning setting not recorded (§8.3)")
         if main_run:
             if not m.get("pinned"):
                 probs.append(f"{m['id']}: not pinned against its model card")

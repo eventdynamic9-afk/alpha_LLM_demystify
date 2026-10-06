@@ -1,5 +1,12 @@
 """Narration runner (§8): fresh context per narration, no memory or retrieval; refusals, empty and
-off-topic outputs logged and counted and re-sampled at most once; A2 tool loop with the sandbox."""
+off-topic outputs logged and counted and re-sampled at most once; A2 tool loop with the sandbox.
+
+A2 (§8.2): once the tool budget is used, the tool results plus a fixed "budget exhausted" message are
+sent and one final turn is requested with tools disabled (``tool_choice="none"``), so models that check
+the most still return a rationale; an attempt that ends without text after exhaustion is recorded as
+``tool_budget_exhausted`` (not ``empty``) and the tool logs of every attempt are kept.  Every call logs
+the request parameters actually sent, the reasoning setting (§8.3), reasoning text when exposed and the
+model's provenance fields (§4.1, §4.3)."""
 from __future__ import annotations
 
 import hashlib
@@ -7,7 +14,7 @@ import json
 import re
 from pathlib import Path
 
-from configs import study
+from configs import prompt, study, template_sha256
 from dsl import parse
 from pools.records import now_iso
 
@@ -55,20 +62,28 @@ class NarrationRunner:
         return self._diag[rec["formula_id"]]
 
     def _call(self, model: str, messages: list, tools, temperature: float, sample: int, role: str,
-              meta: dict) -> dict:
+              meta: dict, tool_choice: str | None = None, reasoning_effort: str | None = None) -> dict:
         ph = prompt_hash(messages, tools)
+        if tool_choice or reasoning_effort:          # non-default request options are part of the cache key
+            ph = hashlib.sha256(f"{ph}|tool_choice={tool_choice}|reasoning_effort={reasoning_effort}".encode()).hexdigest()
         cached = self.cache.get(model, ph, sample, temperature)
         if cached is not None:
             return cached
         client = self.clients[model]
         seed = None if sample < 0 else sample
-        r = client.complete(messages, tools, temperature, self.max_tokens, seed)
+        kw = {k: v for k, v in (("tool_choice", tool_choice), ("reasoning_effort", reasoning_effort)) if v}
+        r = client.complete(messages, tools, temperature, self.max_tokens, seed, **kw)
         resp = {"text": r.text, "tool_calls": r.tool_calls, "usage": r.usage, "latency_s": r.latency_s,
-                "fingerprint": r.fingerprint, "model": r.model, "finish_reason": r.finish_reason}
+                "fingerprint": r.fingerprint, "model": r.model, "finish_reason": r.finish_reason,
+                "reasoning": getattr(r, "reasoning", None)}
         self.cache.put(model, ph, sample, temperature, resp)
+        params = {"temperature": temperature, "max_tokens": self.max_tokens, "seed": seed,
+                  "tool_choice": tool_choice or ("auto" if tools else None),
+                  "reasoning_setting": reasoning_effort or getattr(client, "reasoning_setting", None)}
+        prov = client.provenance() if hasattr(client, "provenance") else {"model_string": client.model_string}
         self.logger.log(role=role, model=model, model_string=client.model_string, prompt_hash=ph,
-                        request={"messages": messages, "tools": tools}, response=resp,
-                        params={"temperature": temperature, "max_tokens": self.max_tokens, "seed": seed},
+                        request={"messages": messages, "tools": tools}, response=resp, params=params,
+                        request_params=getattr(r, "params", None) or {}, provenance=prov,
                         timestamp=now_iso(), **meta)
         return resp
 
@@ -83,17 +98,21 @@ class NarrationRunner:
             diag = self._diagnostics(rec)
             tw = "{} to {}".format(*self.ctx.windows["train"]) if self.ctx else None
         messages, meta = build_messages(rec, cell.access, cell.variant, self.market, seed, diag, tw)
+        effort = getattr(cell, "reasoning_effort", None)
         tools = TOOL_SCHEMAS if cell.access == "A2" else None
         attempts = []
         status = "ok"
+        exhausted = False
+        call_meta = {"formula_id": cell.formula_id, "access": cell.access, "prompt_variant": cell.variant, **meta}
         for attempt in range(2):                     # at most one re-sample
             sample = cell.sample_idx if attempt == 0 else cell.sample_idx + 1000
             msgs = list(messages)
             sandbox = Sandbox(self.ctx, study()["access"]["A2_max_tool_calls"]) if tools and self.ctx else None
-            resp = self._call(cell.model, msgs, tools, cell.temperature, sample, "narrator",
-                              {"formula_id": cell.formula_id, "access": cell.access, **meta})
+            resp = self._call(cell.model, msgs, tools, cell.temperature, sample, "narrator", call_meta,
+                              reasoning_effort=effort)
             tool_log = []
-            while sandbox is not None and resp.get("tool_calls") and not sandbox.exhausted:
+            exhausted = False
+            while sandbox is not None and resp.get("tool_calls"):
                 msgs.append({"role": "assistant", "content": resp.get("text") or "",
                              "tool_calls": [{"id": tc["id"], "type": "function",
                                              "function": {"name": tc["name"], "arguments": json.dumps(tc["arguments"])}}
@@ -102,22 +121,34 @@ class NarrationRunner:
                     out = sandbox.call(tc["name"], tc.get("arguments") or {})
                     tool_log.append({"name": tc["name"], "arguments": tc.get("arguments"), "result": out})
                     msgs.append(tool_message(tc["id"], out))
-                resp = self._call(cell.model, msgs, tools, cell.temperature, sample, "narrator_tool_turn",
-                                  {"formula_id": cell.formula_id, "access": cell.access, **meta})
+                if sandbox.exhausted:                # §8.2 budget used: one final turn with tools disabled
+                    exhausted = True
+                    note = prompt("narrator_a2_budget_exhausted")
+                    msgs.append({"role": "user", "content": note})
+                    fm = {**call_meta, "template_sha256": {**meta["template_sha256"],
+                                                           "a2_budget_exhausted": template_sha256(note)}}
+                    resp = self._call(cell.model, msgs, tools, cell.temperature, sample, "narrator_final_turn", fm,
+                                      tool_choice="none", reasoning_effort=effort)
+                    break
+                resp = self._call(cell.model, msgs, tools, cell.temperature, sample, "narrator_tool_turn", call_meta,
+                                  reasoning_effort=effort)
             status = classify_output(resp.get("text", ""))
-            attempts.append({"sample": sample, "status": status})
+            if exhausted and status == "empty":
+                status = "tool_budget_exhausted"
+            attempts.append({"sample": sample, "status": status, "tool_budget_exhausted": exhausted,
+                             "tool_calls": tool_log})
             if status == "ok":
                 break
         text = resp.get("text", "")
         if rec.get("pool") == "P1" and rec.get("hypothesis"):
             text = f"{rec['hypothesis'].strip()}\n\n{text}"
         client = self.clients[cell.model]
-        rid = f"R-{cell.model}-{cell.formula_id}-{cell.access}-{cell.variant}-{cell.sample_idx}"
-        return {"rationale_id": rid, "formula_id": cell.formula_id, "model": cell.model,
-                "model_version": client.model_string, "family": client.family, "access": cell.access,
-                "prompt_variant": cell.variant, "sample_idx": cell.sample_idx, "temperature": cell.temperature,
-                "text": text, "tool_calls": tool_log, "tokens": {"in": resp.get("usage", {}).get("in"),
-                                                                  "out": resp.get("usage", {}).get("out")},
+        return {"rationale_id": cell.rationale_id, "formula_id": cell.formula_id, "model": cell.model,
+                "model_version": client.model_string, "served_model": resp.get("model"), "family": client.family,
+                "access": cell.access, "prompt_variant": cell.variant, "sample_idx": cell.sample_idx,
+                "temperature": cell.temperature, "reasoning_setting": effort or getattr(client, "reasoning_setting", None),
+                "text": text, "tool_calls": tool_log, "tool_budget_exhausted": exhausted,
+                "tokens": {"in": resp.get("usage", {}).get("in"), "out": resp.get("usage", {}).get("out")},
                 "timestamp": now_iso(), "arm": cell.arm, "pool": cell.pool, "cross_narration": cell.cross,
                 "author_model": rec.get("author_model"), "status": status, "attempts": attempts,
                 "fingerprint": resp.get("fingerprint")}
@@ -133,8 +164,7 @@ class NarrationRunner:
         self.pending = 0
         with open(out_path, "a", encoding="utf-8") as fh:
             for c in cells:
-                rid = f"R-{c.model}-{c.formula_id}-{c.access}-{c.variant}-{c.sample_idx}"
-                if rid in done:
+                if c.rationale_id in done:
                     continue
                 try:
                     r = self.narrate(c)

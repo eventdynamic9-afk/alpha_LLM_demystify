@@ -32,6 +32,8 @@ models:
     open_weight: true
     size_b: 14
     reasoning: true
+    reasoning_setting: default
+    reasoning_effort_levels: [low, high]
     tool_use: true
     roles: [author, narrator, cross_narrator]
     provider: mock

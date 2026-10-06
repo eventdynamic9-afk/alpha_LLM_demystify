@@ -1,0 +1,2 @@
+Tool budget exhausted: no further tool calls are possible. Write your final rationale now, without
+calling any tools.
