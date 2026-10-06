@@ -3,6 +3,7 @@
     python -m data synthetic --out data/processed/synthetic.npz [--stocks 200 --days 2600]
     python -m data rebuild cn --universe csi500 [--no-cross-check]
     python -m data rebuild us [--membership-url URL]
+    python -m data rebuild us-plotly          # documented fallback when §5.4 sources are unreachable
     python -m data refs us
     python -m data qa --panel data/processed/cn_csi500.npz [--second ...]
     python -m data coverage --panel data/processed/us_sp500.npz
@@ -28,7 +29,7 @@ def main(argv=None) -> int:
     s.add_argument("--market", default="CN")
     s.add_argument("--start", default="2014-01-02")
     r = sub.add_parser("rebuild")
-    r.add_argument("market", choices=["cn", "us"])
+    r.add_argument("market", choices=["cn", "us", "us-plotly"])
     r.add_argument("--universe", default="csi500")
     r.add_argument("--start", default="2015-01-01")
     r.add_argument("--end", default="2024-12-31")
@@ -56,6 +57,10 @@ def main(argv=None) -> int:
             from .rebuild.cn import rebuild_cn
 
             print(json.dumps(rebuild_cn(a.universe, a.start, a.end, not a.no_cross_check), indent=1, default=str))
+        elif a.market == "us-plotly":
+            from .rebuild.us_plotly import rebuild_us_plotly
+
+            print(json.dumps(rebuild_us_plotly(membership_url=a.membership_url), indent=1, default=str))
         else:
             from .rebuild.us import SP500_HISTORY_URL, rebuild_us
 

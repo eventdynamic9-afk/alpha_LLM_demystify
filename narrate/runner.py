@@ -15,6 +15,7 @@ from .clients import get_client
 from .logger import CallLogger, ResponseCache, prompt_hash
 from .plan import Cell
 from .prompts import build_messages
+from .relay import PendingResponse
 from .sandbox import TOOL_SCHEMAS, Sandbox, tool_message
 
 _REFUSAL = re.compile(r"\b(i can(?:no|')t|i am unable|i'm unable|i'm sorry|as an ai|i cannot help)\b", re.I)
@@ -129,12 +130,17 @@ class NarrationRunner:
             with open(out_path, encoding="utf-8") as fh:
                 done = {json.loads(line)["rationale_id"] for line in fh if line.strip()}
         results = []
+        self.pending = 0
         with open(out_path, "a", encoding="utf-8") as fh:
             for c in cells:
                 rid = f"R-{c.model}-{c.formula_id}-{c.access}-{c.variant}-{c.sample_idx}"
                 if rid in done:
                     continue
-                r = self.narrate(c)
+                try:
+                    r = self.narrate(c)
+                except PendingResponse:              # relay request written; re-run after it is answered
+                    self.pending += 1
+                    continue
                 fh.write(json.dumps(r, default=str) + "\n")
                 results.append(r)
         return results

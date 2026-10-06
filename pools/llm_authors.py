@@ -18,6 +18,7 @@ from configs import PROMPT_DIR, fill, prompt, study
 from dsl import ParseError, parse, to_qlib, try_parse_any
 from dsl.fields import field_glossary
 from dsl.operators import operator_glossary
+from narrate.relay import PendingResponse
 from verify.stats import daily_spearman, newey_west_mean
 
 from .records import FormulaRecord
@@ -62,12 +63,18 @@ def author_p1(client, ctx, n_formulas: int = 60, mined: bool = False, rounds: in
     out: list[FormulaRecord] = []
     seed = 0
     stratum = "mined" if mined else "raw"
-    while len(out) < n_formulas and seed < n_formulas * 6:
+    pending = 0                                      # relay requests awaiting answers (narrate.relay)
+    while len(out) + pending < n_formulas and seed < n_formulas * 6:
         direction = dirs[seed % len(dirs)]
         user = fill(prompt("author_p1_hypothesis"), field_glossary=fg, operator_glossary=og,
                     research_direction=direction)
         msgs = [{"role": "user", "content": user}]
-        r = client.complete(msgs, temperature=temperature, seed=seed)
+        try:
+            r = client.complete(msgs, temperature=temperature, seed=seed)
+        except PendingResponse:
+            pending += 1
+            seed += 1
+            continue
         if log:
             log(role="author_p1", model=client.model_id, request=msgs, response=r.text, seed=seed)
         seed += 1
@@ -88,7 +95,11 @@ def author_p1(client, ctx, n_formulas: int = 60, mined: bool = False, rounds: in
                 ic, t = _valid_ic(prev, ctx)
                 refine = fill(prompt("author_p1_refine"), previous_formula=to_qlib(prev), valid_ic=ic, valid_t=t)
                 msgs2 = msgs + [{"role": "assistant", "content": r.text}, {"role": "user", "content": refine}]
-                r2 = client.complete(msgs2, temperature=temperature, seed=seed * 100 + k)
+                try:
+                    r2 = client.complete(msgs2, temperature=temperature, seed=seed * 100 + k)
+                except PendingResponse:
+                    trials = None
+                    break
                 if log:
                     log(role="author_p1_refine", model=client.model_id, request=msgs2, response=r2.text)
                 e2 = extract_formula(r2.text)
@@ -104,6 +115,9 @@ def author_p1(client, ctx, n_formulas: int = 60, mined: bool = False, rounds: in
                 prev = cand
                 if abs(cic) > abs(best_ic):
                     best, best_ic = cand, cic
+            if trials is None:                       # a refinement round is pending
+                pending += 1
+                continue
             node = best
         rep = check_validity(node, ctx, dedup)
         if not rep["valid"]:
@@ -122,10 +136,16 @@ def author_p2(client, ctx, n_formulas: int = 60, temperature: float = 0.7, log=N
     dedup = PoolDeduper(ctx)
     out: list[FormulaRecord] = []
     seed = 0
-    while len(out) < n_formulas and seed < n_formulas * 6:
+    pending = 0
+    while len(out) + pending < n_formulas and seed < n_formulas * 6:
         user = fill(prompt("author_p2_formula"), field_glossary=fg, operator_glossary=og)
         msgs = [{"role": "user", "content": user}]
-        r = client.complete(msgs, temperature=temperature, seed=seed)
+        try:
+            r = client.complete(msgs, temperature=temperature, seed=seed)
+        except PendingResponse:
+            pending += 1
+            seed += 1
+            continue
         if log:
             log(role="author_p2", model=client.model_id, request=msgs, response=r.text, seed=seed)
         seed += 1

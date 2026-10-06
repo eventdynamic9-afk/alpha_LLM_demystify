@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from pathlib import Path
 
 
 def main(argv=None) -> int:
@@ -25,6 +26,9 @@ def main(argv=None) -> int:
     p.add_argument("--formulas", required=True)
     p.add_argument("--models", default="models.yaml")
     p.add_argument("--reference-t0", action="store_true")
+    p.add_argument("--pilot", action="store_true")
+    p.add_argument("--pilot-n", type=int)
+    p.add_argument("--k", type=int)
     r = sub.add_parser("run")
     r.add_argument("--formulas", required=True)
     r.add_argument("--panel", required=True)
@@ -33,8 +37,14 @@ def main(argv=None) -> int:
     r.add_argument("--limit", type=int)
     r.add_argument("--k", type=int)
     r.add_argument("--reference-t0", action="store_true")
+    r.add_argument("--pilot", action="store_true", help="§17.1 pilot plan instead of the main plan")
+    r.add_argument("--pilot-n", type=int)
     r.add_argument("--windows")
     r.add_argument("--fast", action="store_true")
+    rl = sub.add_parser("relay", help="list or summarise pending relay requests")
+    rl.add_argument("action", choices=["pending", "stats"])
+    rl.add_argument("--dir", required=True)
+    rl.add_argument("--out", help="write the pending work list as JSON")
     q = sub.add_parser("probe")
     q.add_argument("--models", default="models.yaml")
     q.add_argument("--model-id", required=True)
@@ -69,13 +79,35 @@ def main(argv=None) -> int:
         cfg = load_models(a.models)
         recs = read_jsonl(a.formulas)
         ctx = _ctx(a.panel, a.fast, a.windows)
-        cells = plan_cells(recs, with_role(cfg, "narrator"), k=a.k, reference_t0=a.reference_t0,
-                           novel_allowed=novel_pool_allowed)
+        if a.pilot:
+            from .plan import plan_pilot_cells
+
+            cells = plan_pilot_cells(recs, with_role(cfg, "narrator"), a.pilot_n, a.k, novel_allowed=novel_pool_allowed)
+        else:
+            cells = plan_cells(recs, with_role(cfg, "narrator"), k=a.k, reference_t0=a.reference_t0,
+                               novel_allowed=novel_pool_allowed)
         if a.limit:
             cells = cells[: a.limit]
         runner = NarrationRunner(cfg, {x["formula_id"]: x for x in recs}, a.run_dir, ctx, ctx.panel.market)
         res = runner.run(cells)
-        print(f"narrated {len(res)} cells into {a.run_dir}/rationales.jsonl")
+        print(f"narrated {len(res)} cells into {a.run_dir}/rationales.jsonl"
+              + (f"; {runner.pending} cells pending relay answers" if runner.pending else ""))
+        return 0
+    if a.cmd == "relay":
+        from collections import Counter
+
+        from .relay import Relay
+
+        rel = Relay(a.dir)
+        pend = rel.pending()
+        if a.action == "stats" or not a.out:
+            n_resp = len(list(rel.resp.glob("*.txt"))) if rel.resp.exists() else 0
+            print(json.dumps({"pending": len(pend), "answered": n_resp,
+                              "pending_by_model": dict(Counter(p["model"] for p in pend))}, indent=1))
+        if a.out:
+            Path(a.out).write_text(json.dumps([{"key": p["key"], "tier": p.get("agent_tier"), "request": p["request"],
+                                                "response": p["response"]} for p in pend], indent=0))
+            print(f"wrote {len(pend)} pending requests to {a.out}")
         return 0
     if a.cmd == "probe":
         from .clients import get_client

@@ -98,3 +98,35 @@ def test_french_parser():
     df = parse_french_csv(txt)
     assert list(df.columns) == ["Mkt-RF", "SMB", "HML", "RMW", "CMA", "RF"]
     assert abs(df.iloc[0, 0] + 0.0067) < 1e-12 and len(df) == 2
+
+
+def test_us_plotly_cleaning_rules():
+    import pandas as pd
+
+    from data.rebuild.us_plotly import CORPORATE_ACTIONS, clean
+
+    d = pd.bdate_range("2014-08-01", periods=8)
+    rows = []
+    for i, day in enumerate(d):
+        c = 80.0 if day < pd.Timestamp("2014-08-07") else 40.0              # DISCA 2-for-1 on 2014-08-07
+        rows.append({"date": day, "instrument": "DISCA", "open": c, "high": c * 1.01, "low": c * 0.99,
+                     "close": c, "volume": 1000.0})
+        s = 50.0 * (1.6 if i == 3 else 1.0)                                  # one-day spike on day 3
+        o = 20.0 if i == 5 else s                                            # bad open print on day 5
+        rows.append({"date": day, "instrument": "ZZZ", "open": o, "high": s * 1.01, "low": s * 0.99,
+                     "close": s, "volume": 0.0 if i == 6 else 500.0})       # no-trade row on day 6
+    df = pd.DataFrame(rows).sort_values(["instrument", "date"]).reset_index(drop=True)
+    acts = [a for a in CORPORATE_ACTIONS if a["ticker"] == "DISCA"]
+    import data.rebuild.us_plotly as U
+
+    old, U.CORPORATE_ACTIONS = U.CORPORATE_ACTIONS, acts
+    try:
+        out, log = clean(df)
+    finally:
+        U.CORPORATE_ACTIONS = old
+    disca = out[out.instrument == "DISCA"].set_index("date")
+    assert np.allclose(disca["close"], 40.0) and disca["volume"].iloc[0] == 2000.0
+    z = out[out.instrument == "ZZZ"].reset_index(drop=True)
+    assert np.isnan(z.loc[3, "close"]) and np.isnan(z.loc[5, "open"]) and z.loc[5, "close"] == 50.0
+    assert np.isnan(z.loc[6, "close"]) and np.isnan(z.loc[6, "volume"])
+    assert {r["rule"] for r in log} == {"corporate_action", "one_day_spike", "bad_open", "no_trade"}

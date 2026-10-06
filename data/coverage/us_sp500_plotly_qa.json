@@ -1,0 +1,149 @@
+{
+ "checks": {
+  "adjustment_identified": {
+   "ok": true,
+   "detail": {
+    "adjusted": "vendor split adjustment + manual corporate actions >= 30% gap; dividends not adjusted"
+   }
+  },
+  "no_duplicates": {
+   "ok": true,
+   "detail": {
+    "dup_dates": false,
+    "dup_instruments": false
+   }
+  },
+  "trading_calendar": {
+   "ok": true,
+   "detail": {
+    "weekend_dates": 0
+   }
+  },
+  "prices_positive_and_consistent": {
+   "ok": true,
+   "detail": {
+    "nonpositive_prices": 0,
+    "high_below_low": 0
+   }
+  },
+  "suspensions_flagged": {
+   "ok": true,
+   "detail": {
+    "zero_volume_days": 0,
+    "member_days_without_price": 3839
+   }
+  },
+  "large_jumps": {
+   "ok": true,
+   "detail": {
+    "abs_daily_return_gt_50pct": 2
+   }
+  },
+  "cross_source_mismatch": {
+   "ok": true,
+   "detail": "not run (no second source supplied)"
+  },
+  "point_in_time_membership": {
+   "ok": true,
+   "detail": {
+    "member_share": 0.8810072429006205
+   }
+  },
+  "coverage": {
+   "ok": true,
+   "detail": [
+    {
+     "year": 2013,
+     "member_days": 90742,
+     "valid_days": 89736,
+     "coverage": 0.9889136232395143
+    },
+    {
+     "year": 2014,
+     "member_days": 105345,
+     "valid_days": 104335,
+     "coverage": 0.9904124543167687
+    },
+    {
+     "year": 2015,
+     "member_days": 109817,
+     "valid_days": 108861,
+     "coverage": 0.991294608302904
+    },
+    {
+     "year": 2016,
+     "member_days": 117396,
+     "valid_days": 116889,
+     "coverage": 0.9956812838597567
+    },
+    {
+     "year": 2017,
+     "member_days": 123711,
+     "valid_days": 123351,
+     "coverage": 0.9970899919974779
+    },
+    {
+     "year": 2018,
+     "member_days": 13129,
+     "valid_days": 13129,
+     "coverage": 1.0
+    }
+   ]
+  },
+  "manifest_hashes": {
+   "ok": true,
+   "detail": {
+    "mismatched_or_missing": []
+   }
+  },
+  "missing_fields": {
+   "ok": true,
+   "detail": [
+    "amount",
+    "close",
+    "high",
+    "low",
+    "open",
+    "volume",
+    "vwap"
+   ]
+  },
+  "residual_unadjusted_gaps": {
+   "ok": true,
+   "detail": {
+    "overnight_gap_10_30pct": 474,
+    "overnight_gap_ge_30pct": 4,
+    "share_of_stock_days_10_30pct": 0.000765701731713621
+   }
+  },
+  "universe_coverage": {
+   "ok": true,
+   "detail": {
+    "first": {
+     "date": "2013-02-14",
+     "members": 497,
+     "with_prices": 391,
+     "coverage": 0.7867203219315896
+    },
+    "last": {
+     "date": "2018-02-06",
+     "members": 506,
+     "with_prices": 505,
+     "coverage": 0.9980237154150198
+    },
+    "mean": 0.883204494187561
+   }
+  },
+  "cleaning_log": {
+   "ok": true,
+   "detail": {
+    "corporate_action": 13,
+    "no_trade": 8,
+    "bad_range": 5,
+    "bad_open": 4,
+    "one_day_spike": 3
+   }
+  }
+ },
+ "passed": true
+}

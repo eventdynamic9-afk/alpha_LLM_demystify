@@ -1,1 +1,3 @@
 path,source,url,access_date,sha256,size_bytes,license,notes
+data/raw/us_plotly/all_stocks_5yr.csv,plotly/datasets (Kaggle 'S&P 500 stock data'),https://raw.githubusercontent.com/plotly/datasets/master/all_stocks_5yr.csv,2026-10-06,6aea253cd19de60b568143991aaf1fa482456565c389205658d236e595e716cf,29580549,CC0-1.0,"daily OHLCV 2013-02-08..2018-02-07, Feb-2018 S&P 500 constituents"
+data/raw/sp500_history.csv,fja05680/sp500,https://raw.githubusercontent.com/fja05680/sp500/master/S%26P%20500%20Historical%20Components%20%26%20Changes%20(Updated).csv,2026-10-06,36326709d46d6cd25834de5df457b16f5f96fad3a06b9beac28f7b88aa0b0d54,5530907,see repository,historical S&P 500 constituents since 1996

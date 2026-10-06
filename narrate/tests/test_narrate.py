@@ -138,3 +138,52 @@ def test_full_plan_is_3555_per_model():
             mk(f"P2-{m['id']}-{i}", "P2", "A", author_model=m["id"])
     s = plan_summary(plan_cells(recs, narr, k=3))
     assert s["per_model"] == {m["id"]: 3555 for m in narr}
+
+
+def test_relay_roundtrip(tmp_path):
+    from narrate.clients import get_client
+    from narrate.relay import PendingResponse, Relay, parse_reply, render_request
+    from narrate.sandbox import TOOL_SCHEMAS
+
+    cfg = {"id": "relay-x", "provider": "relay", "relay_dir": str(tmp_path), "agent_tier": "small"}
+    client = get_client(cfg)
+    msgs = [{"role": "system", "content": "sys"}, {"role": "user", "content": "explain Mean($close, 5)"}]
+    with pytest.raises(PendingResponse) as e:
+        client.complete(msgs, temperature=0.7, seed=1)
+    rel = Relay(tmp_path)
+    pend = rel.pending()
+    assert len(pend) == 1 and pend[0]["model"] == "relay-x" and "explain Mean" in open(pend[0]["request"]).read()
+    with pytest.raises(PendingResponse):                     # a different seed is a different request
+        client.complete(msgs, temperature=0.7, seed=2)
+    rel.put(e.value.key, "A five-day moving average of the close.")
+    assert client.complete(msgs, temperature=0.7, seed=1).text == "A five-day moving average of the close."
+    assert len(rel.pending()) == 1
+    txt, calls = parse_reply('TOOL_CALL: {"name": "describe", "arguments": {"expr": "$close"}}\n'
+                             'TOOL_CALL: {"name": "perturb", "arguments": {"expr": "$close", "field": "close"}}')
+    assert txt == "" and [c["name"] for c in calls] == ["describe", "perturb"] and calls[1]["id"] == "call_1"
+    assert parse_reply("plain answer") == ("plain answer", [])
+    r = render_request(msgs + [{"role": "assistant", "content": "", "tool_calls": [
+        {"id": "call_0", "type": "function", "function": {"name": "describe", "arguments": '{"expr": "$close"}'}}]},
+        {"role": "tool", "tool_call_id": "call_0", "content": '{"coverage": 1.0}'}], TOOL_SCHEMAS, 700)
+    assert "TOOL_CALL" in r and "=== tool (call_0) ===" in r and "compute_signal(expr: string)" in r
+
+
+def test_pilot_plan_counts():
+    from narrate.plan import plan_pilot_cells, plan_summary
+    from pools.records import read_jsonl
+
+    recs = []
+    for pool, n in (("K", 14), ("SP", 14), ("NL", 14), ("N", 14)):
+        recs += [{"formula_id": f"{pool}-{i}", "pool": pool, "arm": "B", "base_id": f"b{i}"} for i in range(n)]
+    recs += [{"formula_id": f"SA-{i}", "pool": "SA", "arm": "B", "base_id": f"b{i}",
+              "perturbation": {"type": "sa_sign"}} for i in range(14)]
+    recs += [{"formula_id": f"P1-{m}-{i}", "pool": "P1", "arm": "A", "stratum": "raw", "author_model": m}
+             for m in ("m1", "m2") for i in range(14)]
+    recs += [{"formula_id": f"P3a-{i}", "pool": "P3a", "arm": "A"} for i in range(8)]
+    recs += [{"formula_id": f"P3b-{i}", "pool": "P3b", "arm": "A"} for i in range(8)]
+    cells = plan_pilot_cells(recs, [{"id": "m1", "family": "f"}, {"id": "m2", "family": "f"}], n=12, k=3)
+    s = plan_summary(cells)
+    # (K, SP, SA-sign, NL, N) x 12 x A0 + (P1, P3) x 12 x (A0, A2) = 108 cells, x 3 samples
+    assert s["per_model"] == {"m1": 324, "m2": 324}
+    assert all(c.formula_id.split("-")[1] == c.model for c in cells if c.pool == "P1")
+    assert read_jsonl is not None

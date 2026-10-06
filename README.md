@@ -73,6 +73,45 @@ Ollama on Kaggle / Colab GPUs) and point `base_url` at it. Free API tiers that e
 work through the same client. The Novel pool is only ever sent to local models or endpoints whose
 terms exclude training on inputs (`narrate/roster.py::novel_pool_allowed`).
 
+### Running without a reachable model endpoint: the file relay
+
+`provider: relay` (`narrate/relay.py`, roster example `configs/models.pilot.yaml`) turns every LLM call into a
+request file. When `<RELAY_DIR>/responses/<key>.txt` is missing, the stage writes
+`<RELAY_DIR>/requests/<key>.txt`, skips that item and reports how many are pending. An external agent
+answers each request in a fresh context: it reads only that file and writes only the response. Re-running
+the stage then completes it. The key hashes (model, messages, tools, temperature, max_tokens, seed), so the
+k samples of a cell are separate requests and re-runs are deterministic. A2 and B3 tool use goes through a
+text protocol: `TOOL_CALL: {...}` lines are executed by the sandbox, and the next turn is a new request
+carrying the whole conversation, as with a stateless chat API. Temperature and seed are recorded but cannot
+be enforced on the agent.
+
+```bash
+export RELAY_DIR=runs/pilot_us/relay
+python -m pools build --panel … --out runs/pilot_us --scale 0.4 --authors configs/models.pilot.yaml --protocols P1_raw --n-arm-a 12
+python -m narrate relay pending --dir $RELAY_DIR --out pending.json      # work list for the answering agents
+# … answer, then re-run the same command until nothing is pending; same for narrate / parse / judges
+python -m narrate run --pilot --formulas runs/pilot_us/formulas.jsonl --panel … --run-dir runs/pilot_us --models configs/models.pilot.yaml
+```
+
+### US fallback panel (2013–2018)
+
+`python -m data rebuild us-plotly` builds `data/processed/us_sp500_plotly.npz` when the §5.4 sources
+cannot be reached. Prices come from the CC0 Kaggle "S&P 500 stock data" file (plotly/datasets mirror),
+and point-in-time membership from fja05680/sp500. Cleaning is deterministic and every change is logged in
+`data/coverage/`:
+* no-trade rows, one-day reversed spikes and inconsistent OHLC prints are set to missing;
+* the 13 corporate actions with an overnight gap of 30 % or more are adjusted (see
+  `data/rebuild/us_plotly.py::CORPORATE_ACTIONS`).
+
+The panel is a documented deviation (Appendix E.7):
+* it is survivorship-biased, holding only the February-2018 constituents (77 % of point-in-time members
+  in 2013, 99 % in 2018);
+* it carries price returns only, with no dividend adjustment;
+* it has no post-cutoff window.
+
+The panel declares its windows (train 2014–2015, valid 2016H1, test 2016-07 to 2018-02), and every CLI
+uses them.
+
 ## Implementation decisions to note in the paper
 
 These are places where the protocol left a detail open and the code fixes one. Each is documented in

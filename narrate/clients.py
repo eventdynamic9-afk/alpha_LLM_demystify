@@ -4,6 +4,8 @@
   Ollama / LM Studio servers (Kaggle, Colab, own GPU), and free or paid API tiers that expose the
   OpenAI-compatible protocol (OpenRouter, Groq, Mistral, Cerebras, Gemini's compatibility endpoint...).
   Uses only the standard library.
+* :class:`RelayClient` — file relay answered by an external agent in a fresh context
+  (:mod:`narrate.relay`), for runs where no endpoint is reachable.
 * :class:`MockClient` — deterministic offline simulator used by tests and the smoke pipeline.  It
   "reads" the formula with the static analysers, makes misreadings at a configured rate, recalls the
   base formula of a recognised public alpha (anchoring), follows misleading labels at a configured
@@ -94,6 +96,31 @@ class OpenAICompatibleClient(LLMClient):
                             "reasoning": (usage.get("completion_tokens_details") or {}).get("reasoning_tokens")},
                            time.time() - t0, data.get("system_fingerprint"), data.get("model", self.model_string),
                            ch.get("finish_reason"), data)
+
+
+class RelayClient(LLMClient):
+    """Writes each unanswered request to the relay directory and raises :class:`PendingResponse`."""
+
+    def __init__(self, cfg: dict):
+        from .relay import Relay
+
+        super().__init__(cfg)
+        self.relay = Relay(os.environ.get("RELAY_DIR") or cfg.get("relay_dir") or "runs/relay")
+
+    def complete(self, messages, tools=None, temperature=0.7, max_tokens=700, seed=None) -> LLMResponse:
+        from .relay import PendingResponse, parse_reply, request_key
+
+        key = request_key(self.model_id, messages, tools, temperature, max_tokens, seed)
+        reply = self.relay.response(key)
+        if reply is None:
+            path = self.relay.write_request(key, messages, tools,
+                                            {"model": self.model_id, "agent_tier": self.cfg.get("agent_tier"),
+                                             "temperature": temperature, "seed": seed, "max_tokens": max_tokens,
+                                             "has_tools": bool(tools)}, max_tokens)
+            raise PendingResponse(key, path)
+        text, calls = parse_reply(reply) if tools else (reply.strip(), [])
+        return LLMResponse(text, calls, {"in": None, "out": len(reply.split())}, 0.0, key, self.model_string,
+                           "tool_calls" if calls else "stop")
 
 
 # =============================================================================== mock simulator
@@ -283,6 +310,8 @@ def get_client(cfg: dict) -> LLMClient:
     prov = cfg.get("provider", "openai_compatible")
     if prov == "mock":
         return MockClient(cfg)
+    if prov == "relay":
+        return RelayClient(cfg)
     if prov in ("openai_compatible", "local", "openrouter", "groq", "mistral", "cerebras", "gemini_openai"):
         if not cfg.get("base_url") or cfg.get("base_url") == "TO_FILL":
             raise ValueError(f"model {cfg['id']}: base_url must be set on the run date")

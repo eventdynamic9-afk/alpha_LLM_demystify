@@ -1,0 +1,34 @@
+instrument,date,rule,detail
+BHF,2017-07-26,no_trade,
+DHR,2016-01-12,no_trade,
+FTV,2016-07-01,no_trade,
+O,2016-01-12,no_trade,
+REGN,2015-06-09,no_trade,
+UA,2016-04-07,no_trade,
+VRTX,2015-05-12,no_trade,
+WRK,2015-06-26,no_trade,
+LNT,2016-05-19,one_day_spike,close-to-close move reversed next day
+MRO,2017-09-14,one_day_spike,close-to-close move reversed next day
+NWL,2017-09-14,one_day_spike,close-to-close move reversed next day
+AOS,2014-05-19,bad_open,"open outside [low, high] by more than 1%"
+CHD,2014-05-19,bad_open,"open outside [low, high] by more than 1%"
+DHR,2014-11-06,bad_open,"open outside [low, high] by more than 1%"
+O,2014-11-06,bad_open,"open outside [low, high] by more than 1%"
+AOS,2014-05-19,bad_range,"close outside [low, high] by more than 1%: open/high/low dropped"
+BBY,2016-03-14,bad_range,"close outside [low, high] by more than 1%: open/high/low dropped"
+CHK,2014-06-30,bad_range,"close outside [low, high] by more than 1%: open/high/low dropped"
+SPG,2014-05-28,bad_range,"close outside [low, high] by more than 1%: open/high/low dropped"
+WRK,2016-05-13,bad_range,"close outside [low, high] by more than 1%: open/high/low dropped"
+DISCA,2014-08-07,corporate_action,split factor 0.500000: one Class C share distributed per Class A share (economically 2-for-1)
+DISCK,2014-08-07,corporate_action,split factor 0.500000: one Class C share distributed per Class C share (economically 2-for-1)
+A,2014-11-03,corporate_action,distribution factor 0.721780: Keysight Technologies spin-off
+BAX,2015-07-01,corporate_action,distribution factor 0.536966: Baxalta spin-off
+NI,2015-07-02,corporate_action,distribution factor 0.387459: Columbia Pipeline Group spin-off
+EBAY,2015-07-20,corporate_action,distribution factor 0.405642: PayPal spin-off
+DHR,2016-07-05,corporate_action,distribution factor 0.756572: Fortive spin-off
+ARNC,2016-11-01,corporate_action,distribution factor 0.774373: Alcoa Corp separation
+YUM,2016-11-01,corporate_action,distribution factor 0.721025: Yum China spin-off
+CAG,2016-11-10,corporate_action,distribution factor 0.771948: Lamb Weston spin-off
+XRX,2017-01-03,corporate_action,distribution factor 0.747995: Conduent spin-off
+HPE,2017-04-03,corporate_action,distribution factor 0.759494: Enterprise Services spin-merger into DXC Technology
+BHGE,2017-07-05,corporate_action,distribution factor 0.707351: special cash dividend to legacy Baker Hughes holders at the GE combination

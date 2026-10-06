@@ -20,6 +20,7 @@ def _read(path):
 
 def run(a) -> int:
     from narrate.logger import CallLogger
+    from narrate.relay import PendingResponse
 
     from .ensemble import ensemble, merge_parser_and_rules
     from .llm_parser import llm_parse
@@ -41,7 +42,7 @@ def run(a) -> int:
     logger = CallLogger(Path(a.out).with_name("parser_calls.jsonl"))
     out = Path(a.out)
     out.parent.mkdir(parents=True, exist_ok=True)
-    n = 0
+    n = pending = 0
     adjud = []
     with open(out, "w", encoding="utf-8") as fh:
         for r in rationales:
@@ -51,9 +52,13 @@ def run(a) -> int:
             if a.rules_only:
                 claims = [normalize_claim({**c, "parser": "rules"}) for c in extract_claims(text, rid)]
             else:
-                res = llm_parse(client, rid, text, log=logger.log)
+                try:
+                    res = llm_parse(client, rid, text, log=logger.log)
+                    res2 = llm_parse(client2, rid, text, log=logger.log) if client2 is not None else None
+                except PendingResponse:              # relay request written; re-run after it is answered
+                    pending += 1
+                    continue
                 if client2 is not None:
-                    res2 = llm_parse(client2, rid, text, log=logger.log)
                     e = ensemble(res["claims"], res2["claims"], text, rid)
                     claims = e["accepted"]
                     adjud += e["adjudicate"]
@@ -67,7 +72,8 @@ def run(a) -> int:
         with open(out.with_name("claims_to_adjudicate.jsonl"), "w", encoding="utf-8") as fh:
             for c in adjud:
                 fh.write(json.dumps(c) + "\n")
-    print(f"wrote {n} claims from {len(rationales)} rationales to {out}")
+    print(f"wrote {n} claims from {len(rationales)} rationales to {out}"
+          + (f"; {pending} rationales pending relay answers" if pending else ""))
     return 0
 
 

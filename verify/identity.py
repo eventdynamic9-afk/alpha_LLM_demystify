@@ -17,6 +17,15 @@ def numerically_equivalent(a: np.ndarray, b: np.ndarray, rho: float = 0.999, sha
     fa, fb = np.isfinite(a), np.isfinite(b)
     if np.array_equal(fa, fb) and np.array_equal(a[fa], b[fb]):
         return {"equivalent": True, "rule": "exact"}
+    # Exact early rejection: rho_t can only be finite on rows with >= min_n joint observations, so if
+    # more sampled rows fail than (1 - share) x that count allows, the full computation must fail too.
+    possible = int(((fa & fb).sum(axis=1) >= min_n).sum())
+    if possible > 200:
+        idx = np.linspace(0, a.shape[0] - 1, 60).astype(int)
+        rs = daily_spearman(a[idx], b[idx], min_n=min_n)
+        fails = int((np.isfinite(rs) & (rs < rho)).sum())
+        if fails > (1.0 - share) * possible:
+            return {"equivalent": False, "rule": "rank_corr_screen", "sampled_failures": fails}
     r = daily_spearman(a, b, min_n=min_n)
     ok = np.isfinite(r)
     if ok.sum() == 0:

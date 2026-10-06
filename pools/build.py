@@ -399,7 +399,7 @@ def build_p3(ctx, target: list[Node], n: int = 60, seed: int = 11, report: dict 
 
 
 def build_all(ctx, out_dir: str | Path, scale: float = 1.0, search: bool = False, authors: list | None = None,
-              seed: int | None = None) -> dict:
+              seed: int | None = None, protocols: tuple = ("P1_raw", "P1_mined", "P2"), n_arm_a: int | None = None) -> dict:
     out_dir = Path(out_dir)
     report: dict = {"created_at": now_iso(), "scale": scale}
     recs = build_arm_b(ctx, seed, scale, search, report)
@@ -408,14 +408,18 @@ def build_all(ctx, out_dir: str | Path, scale: float = 1.0, search: bool = False
     if authors:
         from .llm_authors import author_p1, author_p2
 
-        n = max(2, int(round(60 * scale)))
+        n = n_arm_a or max(2, int(round(60 * scale)))
         for client in authors:
-            a_recs += author_p1(client, ctx, n, mined=False)
-            a_recs += author_p1(client, ctx, n, mined=True)
-            a_recs += author_p2(client, ctx, n)
+            if "P1_raw" in protocols:
+                a_recs += author_p1(client, ctx, n, mined=False)
+            if "P1_mined" in protocols:
+                a_recs += author_p1(client, ctx, n, mined=True)
+            if "P2" in protocols:
+                a_recs += author_p2(client, ctx, n)
         if a_recs:
             target = [parse(r.dsl) for r in a_recs if r.pool in ("P1", "P2")]
-    a_recs += build_p3(ctx, target, max(2, int(round(60 * scale))), report=report)
+        report["arm_a_authored"] = dict(Counter(f"{r.pool}_{r.stratum or ''}|{r.author_model}" for r in a_recs))
+    a_recs += build_p3(ctx, target, n_arm_a or max(2, int(round(60 * scale))), report=report)
     allr = recs + a_recs
     write_jsonl(allr, out_dir / "formulas.jsonl")
     report["counts"] = dict(Counter(r.pool if r.pool != "SA" else f"SA_{r.perturbation['type'][3:]}" for r in allr))

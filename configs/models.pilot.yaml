@@ -1,0 +1,82 @@
+# Pilot roster for runs where no model endpoint is reachable: every call goes through the file relay
+# (narrate/relay.py) and is answered by a fresh-context agent of the stated tier. All tiers come from
+# one model family and one organization, so the §4.1 diversity criteria are NOT met (documented
+# deviation, Appendix E.7); the exact model versions behind each tier are recorded in the run log
+# outside this file. The parser/judge tier is never used as a narrator (role separation, §4.2).
+version: "pilot-relay"
+run_date: "2026-10-06"
+criteria:
+  min_closed_families: 0
+  min_open_families: 0
+  min_organizations: 1
+  min_sizes_in_ladder: 0          # the ladder rule counts open-weight sizes; the relay tiers are closed
+  require_reasoning: false
+  require_non_reasoning: false
+models:
+  - id: relay-small
+    family: relay
+    organization: relay_org
+    open_weight: false
+    size_b: null
+    size_rank: 1
+    reasoning: false
+    tool_use: true
+    roles: [author, narrator]
+    provider: relay
+    agent_tier: small
+    model_string: relay-small
+    training_cutoff: "2025-02-01"
+    may_train_on_inputs: false
+    pinned: true
+  - id: relay-medium
+    family: relay
+    organization: relay_org
+    open_weight: false
+    size_b: null
+    size_rank: 2
+    reasoning: false
+    tool_use: true
+    roles: [author, narrator]
+    provider: relay
+    agent_tier: medium
+    model_string: relay-medium
+    training_cutoff: "2026-01-01"
+    may_train_on_inputs: false
+    pinned: true
+  - id: relay-large
+    family: relay
+    organization: relay_org
+    open_weight: false
+    size_b: null
+    size_rank: 3
+    reasoning: false
+    tool_use: true
+    roles: [author, narrator]
+    provider: relay
+    agent_tier: large
+    model_string: relay-large
+    training_cutoff: "2026-01-01"
+    may_train_on_inputs: false
+    pinned: true
+  - id: relay-xl
+    family: relay
+    organization: relay_org
+    open_weight: false
+    size_b: null
+    size_rank: 4
+    reasoning: false
+    tool_use: true
+    roles: [parser, judge]
+    provider: relay
+    agent_tier: xl
+    model_string: relay-xl
+    training_cutoff: "2026-01-01"
+    may_train_on_inputs: false
+    pinned: true
+decoding:
+  temperature_primary: 0.7
+  k_samples: 3
+  temperature_reference: 0.0
+  max_tokens: 700
+  parser_temperature: 0.0
+  judge_temperature: 0.0

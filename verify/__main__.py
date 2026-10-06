@@ -23,6 +23,8 @@ def _ctx(panel_path: str, fast: bool, windows: str | None = None):
 
     p = Panel.load(panel_path)
     w = json.loads(windows) if windows else None
+    if w is None and p.meta.get("windows"):          # windows declared by the panel builder (deviation log)
+        w = {k: tuple(v) for k, v in p.meta["windows"].items()}
     if w is None and p.meta.get("source") == "synthetic":
         cut = str(p.dates[int(p.T * 0.6)])
         w = {"train": (str(p.dates[0]), cut), "test": (cut, str(p.dates[-1]))}

@@ -24,11 +24,11 @@ from ..panel import Panel
 from .common import PROCESSED, RAW, download, env_key
 
 SP500_HISTORY_URL = ("https://raw.githubusercontent.com/fja05680/sp500/master/"
-                     "S%26P%20500%20Historical%20Components%20%26%20Changes(01-17-2025).csv")
+                     "S%26P%20500%20Historical%20Components%20%26%20Changes%20(Updated).csv")
 
 
 def fetch_sp500_membership(url: str = SP500_HISTORY_URL) -> dict:
-    """The file name in fja05680/sp500 carries a date stamp that changes; pass the current URL."""
+    """fja05680/sp500 keeps a rolling "(Updated)" file; dated snapshots are renamed over time."""
     path = download(url, RAW / "sp500_history.csv", "fja05680/sp500", license="see repository",
                     notes="historical S&P 500 constituents since 1996")
     return parse_sp500_history(str(path))
